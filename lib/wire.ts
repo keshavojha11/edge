@@ -91,10 +91,11 @@ export async function submitTask(
 
 export async function pollJob(
   jobId: string,
-  maxWaitMs = 60_000
+  // Wire jobs observed to take ~2min; use 3min default
+  maxWaitMs = 180_000
 ): Promise<unknown> {
   const deadline = Date.now() + maxWaitMs;
-  let delay = 1000;
+  let delay = 4000;
 
   while (Date.now() < deadline) {
     const res = await fetch(`${BASE}/v1/holocron/jobs/${jobId}`, {
@@ -102,23 +103,29 @@ export async function pollJob(
     });
 
     if (res.status === 429) {
-      await sleep(delay * 2);
+      await sleep(15_000);
       continue;
     }
     if (!res.ok) {
       throw new Error(`Poll failed: ${res.status} ${await res.text()}`);
     }
 
-    const data = (await res.json()) as { status: string; result?: unknown };
+    const data = (await res.json()) as {
+      status: string;
+      data?: unknown;
+      result?: unknown;
+    };
+
     if (data.status === "completed" || data.status === "success") {
-      return data.result;
+      // Wire wraps result in data.data; fall back to data.result then data itself
+      return (data as Record<string, unknown>).data ?? data.result ?? data;
     }
     if (data.status === "failed" || data.status === "error") {
       throw new Error(`Job ${jobId} failed: ${JSON.stringify(data)}`);
     }
 
     await sleep(delay);
-    delay = Math.min(delay * 1.5, 8000);
+    delay = Math.min(delay * 1.3, 10_000);
   }
 
   throw new Error(`Job ${jobId} timed out after ${maxWaitMs}ms`);
@@ -135,10 +142,12 @@ export async function runTask(
   while (attempt < retries) {
     try {
       const jobId = await submitTask(actionId, params, credentialId);
-      const result = await pollJob(jobId);
+      const raw = await pollJob(jobId);
       totalCreditsSpent += 1;
       await logEvent("ingest", `${label} ok`, 1);
-      return result;
+      // Wire result shape: { status, data: <actual payload>, meta, ... }
+      const wireResult = raw as Record<string, unknown>;
+      return wireResult?.data ?? raw;
     } catch (err) {
       attempt++;
       const msg = err instanceof Error ? err.message : String(err);

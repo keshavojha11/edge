@@ -1,16 +1,12 @@
 import "dotenv/config";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PrismaClient } = require("../app/generated/prisma");
+const { PrismaClient } = require("../app/generated/prisma/client");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Database = require("better-sqlite3");
 
 function createPrisma() {
   const url = process.env.DATABASE_URL ?? "file:./dev.db";
-  const filePath = url.replace(/^file:/, "");
-  const sqlite = new Database(filePath);
-  const adapter = new PrismaBetterSqlite3(sqlite);
+  const adapter = new PrismaBetterSqlite3({ url });
   return new PrismaClient({ adapter });
 }
 
