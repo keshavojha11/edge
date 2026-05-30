@@ -1,14 +1,17 @@
 import "dotenv/config";
-import { PrismaClient } from "../app/generated/prisma";
-import { PrismaBetterSqlite3 as PrismaLibSQL } from "@prisma/adapter-better-sqlite3";
-import Database from "better-sqlite3";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PrismaClient } = require("../app/generated/prisma");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Database = require("better-sqlite3");
 
 function createPrisma() {
   const url = process.env.DATABASE_URL ?? "file:./dev.db";
   const filePath = url.replace(/^file:/, "");
   const sqlite = new Database(filePath);
-  const adapter = new PrismaLibSQL(sqlite);
-  return new PrismaClient({ adapter } as ConstructorParameters<typeof PrismaClient>[0]);
+  const adapter = new PrismaBetterSqlite3(sqlite);
+  return new PrismaClient({ adapter });
 }
 
 declare global {
