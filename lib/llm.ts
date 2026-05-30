@@ -2,7 +2,7 @@ import "dotenv/config";
 
 const BASE = process.env.OPENROUTER_BASE ?? "https://openrouter.ai/api/v1";
 const API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const MODEL = process.env.OPENROUTER_MODEL ?? "anthropic/claude-3.5-sonnet";
+const MODEL = process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-4.6";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
@@ -21,7 +21,7 @@ export async function chat(
       "Content-Type": "application/json",
       Authorization: `Bearer ${API_KEY}`,
       "HTTP-Referer": "https://edge-markets.vercel.app",
-      "X-Title": "Edge — Prediction Market Intelligence",
+      "X-Title": "Edge - Prediction Market Intelligence",
     },
     body: JSON.stringify({
       model: MODEL,
