@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Market {
+  id            String    @id @default(cuid())
+  venue         String
+  venueMarketId String
+  title         String
+  outcomesJson  String
+  closeTime     DateTime?
+  liquidity     Float?
+  snapshotAt    DateTime  @default(now())
+  url           String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([venue, venueMarketId])
+  @@index([venue])
+  @@index([snapshotAt])
+}
+
+model MatchGroup {
+  id               String   @id @default(cuid())
+  label            String
+  marketIds        String
+  matchConfidence  Float
+  notedDifferences String
+  maxSpread        Float
+  updatedAt        DateTime @updatedAt
+  createdAt        DateTime @default(now())
+
+  watches Watch[]
+
+  @@index([maxSpread])
+}
+
+model Watch {
+  id           String     @id @default(cuid())
+  matchGroupId String
+  thresholdPct Float
+  status       String     @default("active")
+  lastSpread   Float?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  matchGroup MatchGroup @relation(fields: [matchGroupId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model Event {
+  id           String   @id @default(cuid())
+  type         String
+  detail       String
+  creditsSpent Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([type])
+  @@index([createdAt])
+}
