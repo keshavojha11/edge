@@ -47,23 +47,52 @@ export async function jsonChat<T>(
 ): Promise<T> {
   const raw = await chat(messages, { ...opts, temperature: opts.temperature ?? 0 });
 
-  // 1. Try stripping markdown fences
+  // 1. Try stripping markdown fences first
   const fenceStripped = raw
     .replace(/^```(?:json)?\s*/m, "")
     .replace(/\s*```\s*$/m, "")
     .trim();
-
-  // 2. If that's valid JSON, use it
   try {
     return JSON.parse(fenceStripped) as T;
-  } catch {
-    // 3. Extract the first {...} or [...] block from anywhere in the response
-    const objMatch = raw.match(/\{[\s\S]*\}/);
-    const arrMatch = raw.match(/\[[\s\S]*\]/);
-    const candidate = objMatch?.[0] ?? arrMatch?.[0];
-    if (candidate) {
-      return JSON.parse(candidate) as T;
+  } catch { /* fall through */ }
+
+  // 2. Use bracket-depth tracking to extract the first complete JSON object/array.
+  //    Greedy regex (/\{[\s\S]*\}/) grabs everything including text after close —
+  //    depth tracking finds the exact matching bracket.
+  const firstBrace = raw.indexOf("{");
+  const firstBracket = raw.indexOf("[");
+  const start =
+    firstBrace === -1 ? firstBracket :
+    firstBracket === -1 ? firstBrace :
+    Math.min(firstBrace, firstBracket);
+
+  if (start !== -1) {
+    const open = raw[start] === "{" ? "{" : "[";
+    const close = open === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let end = -1;
+
+    for (let i = start; i < raw.length; i++) {
+      const ch = raw[i];
+      if (escape) { escape = false; continue; }
+      if (ch === "\\" && inString) { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === open) depth++;
+      else if (ch === close) {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
     }
-    throw new Error(`jsonChat: no JSON found in response: ${raw.slice(0, 200)}`);
+
+    if (end !== -1) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1)) as T;
+      } catch { /* fall through */ }
+    }
   }
+
+  throw new Error(`jsonChat: no valid JSON in response: ${raw.slice(0, 300)}`);
 }

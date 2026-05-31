@@ -186,10 +186,20 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
   const creditsUsed = getCreditsSpent();
   const errors = [...submitErrors, ...pollErrors];
 
+  // Run targeted ingest of known cross-venue macro markets (Fed, cuts totals, etc.)
+  // These are fetched by slug/ID rather than generic top-liquidity lists.
+  const { fetchTargetedMarkets } = await import("./ingest-targeted");
+  const targeted = await fetchTargetedMarkets();
+  allMarkets.push(...targeted.markets);
+  errors.push(...targeted.errors);
+  if (targeted.markets.length > 0) {
+    console.log(`[ingest] targeted: ${targeted.markets.length} macro markets`);
+  }
+
   // Persist whatever we got (partial success is fine — one venue down ≠ blank board)
   if (allMarkets.length > 0) {
     await upsertMarkets(allMarkets);
-    console.log(`[ingest] saved ${allMarkets.length} markets from ${succeededVenues.join(", ")}`);
+    console.log(`[ingest] saved ${allMarkets.length} markets from ${succeededVenues.join(", ")} + targeted`);
     return { markets: allMarkets, creditsUsed, errors };
   }
 

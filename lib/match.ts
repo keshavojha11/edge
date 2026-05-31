@@ -139,7 +139,7 @@ async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> 
           content: `Match these ${markets.length} markets into groups:\n\n${marketList}`,
         },
       ],
-      { maxTokens: 3000 }
+      { maxTokens: 4000 }
     );
   } catch (err) {
     console.error("[match] LLM error:", err);
