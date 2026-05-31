@@ -77,12 +77,25 @@ export async function matchMarkets(
     byVenue[m.venue].push(m);
   }
 
-  // Sort each venue's markets by liquidity desc, cap
-  const capped: NormalizedMarket[][] = Object.values(byVenue).map((ms) =>
-    ms
-      .sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))
-      .slice(0, perVenueCap)
-  );
+  // Title patterns that indicate non-matchable intraday/price-bracket markets.
+  // These are Kalshi series like "ETH price at 12pm EDT?" — identical titles,
+  // high liquidity, but no cross-venue equivalent. Deduplicate before capping.
+  const SKIP_TITLE_RE =
+    /price (range|at) |close (at|above|below) \$|above \$\d|below \$\d|Up or Down|at \d+(am|pm)|O\/U \d|Spread:|Handicap|first inning|first blood|halftime/i;
+
+  const capped: NormalizedMarket[][] = Object.values(byVenue).map((ms) => {
+    // 1. Filter out obvious price-bracket / intraday / sports prop markets
+    const filtered = ms.filter((m) => !SKIP_TITLE_RE.test(m.title));
+
+    // 2. Title-dedup: keep highest-liquidity market per normalised title prefix
+    //    (handles Kalshi ETH/BTC bracket series with near-identical titles)
+    const seen = new Map<string, NormalizedMarket>();
+    for (const m of filtered.sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))) {
+      const key = m.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 40);
+      if (!seen.has(key)) seen.set(key, m);
+    }
+    return Array.from(seen.values()).slice(0, perVenueCap);
+  });
 
   // Interleave: take one from each venue in round-robin
   const interleaved: NormalizedMarket[] = [];
