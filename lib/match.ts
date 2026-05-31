@@ -371,13 +371,18 @@ export async function clearDemoGroups(): Promise<number> {
 }
 
 export async function getRankedGroups(): Promise<RankedGroup[]> {
+  // DEMO_MODE: serve the static snapshot directly — no DB dependency.
+  // This keeps the deployed board populated on serverless (ephemeral SQLite)
+  // and is clearly labeled "SAMPLE SNAPSHOT" in the UI via the isDemo flag.
+  if (process.env.DEMO_MODE === "true") {
+    const { DEMO_GROUPS } = await import("./demo-snapshot");
+    return DEMO_GROUPS;
+  }
+
   const { prisma } = await import("./db");
 
-  // Strict source separation: DEMO_MODE → seed only; live → live only. Never mix.
-  const demoMode = process.env.DEMO_MODE === "true";
-  const whereClause = demoMode
-    ? { id: { startsWith: "demo-" } }
-    : { id: { not: { startsWith: "demo-" } } };
+  // Live only: exclude any demo- prefixed groups
+  const whereClause = { id: { not: { startsWith: "demo-" } } };
 
   const groups = await prisma.matchGroup.findMany({
     where: whereClause,
