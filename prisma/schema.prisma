@@ -72,6 +72,17 @@ model Event {
   @@index([createdAt])
 }
 
+// Cached payload for each non-market panel (macro indicator, trending list,
+// news feed). Served on page load — NEVER fetched per request. Refreshed by
+// the live run + scheduled cron.
+model PanelCache {
+  key          String   @id // e.g. "vix", "coins", "trending:kalshi", "news:cnbc"
+  payloadJson  String
+  creditsSpent Int      @default(0)
+  fetchedAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 // ─── Async live-ingest run tracking ─────────────────────────────────────────────
 
 model Run {

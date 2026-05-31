@@ -151,7 +151,7 @@ const VENUE_DOT: Record<string, string> = {
   robinhood: "bg-green-400",
 };
 
-export function MispricingsBoard() {
+export function MispricingsBoard({ onRunComplete }: { onRunComplete?: () => void } = {}) {
   const [groups, setGroups] = useState<RankedGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
@@ -226,6 +226,7 @@ export function MispricingsBoard() {
         }
         if (s.done) {
           await load(); // pull final board (latest completed run)
+          onRunComplete?.(); // let the shell refresh panels (macro/trending/news)
           break;
         }
       }
