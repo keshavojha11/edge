@@ -62,6 +62,18 @@ function CompactRow({
   const realMarkets = group.markets.filter((m) => !m.isPlayMoney);
   const hasSpread = group.realMoneySpread > 0;
 
+  // Green/red directional: top spread pair — cheaper side green, richer side red
+  const topSpread = group.spreadDetails.find(
+    (s) =>
+      !group.markets.find((m) => m.venue === s.venueA)?.isPlayMoney &&
+      !group.markets.find((m) => m.venue === s.venueB)?.isPlayMoney
+  );
+  const cheaperVenue = topSpread
+    ? topSpread.probA < topSpread.probB
+      ? topSpread.venueA
+      : topSpread.venueB
+    : null;
+
   return (
     <div>
       <button
@@ -73,16 +85,25 @@ function CompactRow({
           {group.label}
         </span>
 
-        {/* Venue chips — desktop only */}
+        {/* Venue chips with green/red directional coloring */}
         <div className="hidden sm:flex gap-1 shrink-0">
-          {realMarkets.map((m) => (
-            <span
-              key={m.venue}
-              className={`px-1.5 py-0.5 text-[10px] font-bold tracking-wide rounded border border-current ${VENUE_COLORS[m.venue] ?? "text-zinc-500"}`}
-            >
-              {VENUE_LABELS[m.venue] ?? m.venue}
-            </span>
-          ))}
+          {realMarkets.map((m) => {
+            const isChеaper = m.venue === cheaperVenue;
+            const isRicher = cheaperVenue && m.venue !== cheaperVenue && hasSpread;
+            const color = isChеaper
+              ? "text-green-400 border-green-400/60"
+              : isRicher
+              ? "text-red-400 border-red-400/60"
+              : VENUE_COLORS[m.venue] ?? "text-zinc-500";
+            return (
+              <span
+                key={m.venue}
+                className={`px-1.5 py-0.5 text-[10px] font-bold tracking-wide rounded border ${color}`}
+              >
+                {VENUE_LABELS[m.venue] ?? m.venue}
+              </span>
+            );
+          })}
         </div>
 
         {/* Spread value */}
@@ -124,6 +145,7 @@ export function MispricingsBoard() {
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [isDemo, setIsDemo] = useState(false);
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -139,11 +161,13 @@ export function MispricingsBoard() {
       const data = (await res.json()) as {
         groups?: RankedGroup[];
         creditsSpent?: number;
+        isDemo?: boolean;
         error?: string;
       };
       if (data.error) throw new Error(data.error);
       setGroups(data.groups ?? []);
       setCreditsSpent(data.creditsSpent ?? 0);
+      setIsDemo(data.isDemo ?? false);
       setLastFetched(new Date());
       setError(null);
     } catch (e) {
@@ -158,7 +182,9 @@ export function MispricingsBoard() {
   async function refresh() {
     setRefreshing(true);
     try {
+      // Ingest + run matching in sequence
       await fetch("/api/ingest?force=true", { method: "POST" });
+      await fetch("/api/match", { method: "POST" });
       await load();
     } finally {
       setRefreshing(false);
@@ -167,6 +193,21 @@ export function MispricingsBoard() {
 
   return (
     <div className="space-y-3">
+      {/* DEMO_MODE label — P1 requirement: never misrepresent sample data as live */}
+      {isDemo && (
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-yellow-600/40 bg-yellow-600/10">
+          <span className="text-yellow-500 font-bold text-xs uppercase tracking-widest">Sample snapshot</span>
+          <span className="text-yellow-600/70 text-xs">— illustrative data, not live prices.</span>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="ml-auto text-yellow-600 text-xs underline underline-offset-2 hover:text-yellow-400 disabled:opacity-40"
+          >
+            {refreshing ? "fetching live..." : "Run live refresh →"}
+          </button>
+        </div>
+      )}
+
       {/* Spread ticker */}
       {groups.length > 0 && <SpreadTicker groups={groups} />}
 
@@ -189,13 +230,15 @@ export function MispricingsBoard() {
               {lastFetched.toLocaleTimeString()}
             </span>
           )}
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:border-amber-400/50 hover:text-amber-400 transition-colors disabled:opacity-40"
-          >
-            {refreshing ? "fetching..." : "↻ refresh"}
-          </button>
+          {!isDemo && (
+            <button
+              onClick={refresh}
+              disabled={refreshing}
+              className="px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:border-amber-400/50 hover:text-amber-400 transition-colors disabled:opacity-40"
+            >
+              {refreshing ? "fetching..." : "↻ refresh"}
+            </button>
+          )}
         </div>
       </div>
 
