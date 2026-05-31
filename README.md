@@ -6,6 +6,20 @@ Edge pulls live odds from Kalshi, Polymarket, Robinhood, and Manifold via Anakin
 
 **Not financial advice.** Spreads are signals, not guaranteed risk-free arbitrage. Resolution criteria, dates, fees, and liquidity differ between venues.
 
+**Live demo:** https://edge-eta.vercel.app (deployed in labeled SAMPLE SNAPSHOT mode; "Run live refresh" performs a real Wire ingest)
+
+---
+
+## Screenshots
+
+The mispricings board — compact table, live spread ticker, green (cheaper) / red (richer) venue chips, amber spread badges:
+
+![Edge board](docs/screenshots/board.png)
+
+Expanded match group — per-venue odds, play-money "crowd sentiment" excluded from the spread, resolution-difference caveats:
+
+![Edge card detail](docs/screenshots/card-detail.png)
+
 ---
 
 ## The problem
