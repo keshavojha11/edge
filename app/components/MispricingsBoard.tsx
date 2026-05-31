@@ -2,7 +2,119 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { MispricingCard } from "./MispricingCard";
+import { SpreadBadge } from "./SpreadBadge";
 import type { RankedGroup } from "@/lib/match";
+
+const VENUE_COLORS: Record<string, string> = {
+  kalshi: "text-blue-400",
+  polymarket: "text-violet-400",
+  manifold: "text-zinc-500",
+  robinhood: "text-green-400",
+};
+
+const VENUE_LABELS: Record<string, string> = {
+  kalshi: "K",
+  polymarket: "P",
+  manifold: "M",
+  robinhood: "RH",
+};
+
+// ── Spread ticker ─────────────────────────────────────────────────────────────
+
+function SpreadTicker({ groups }: { groups: RankedGroup[] }) {
+  const live = groups.filter((g) => g.realMoneySpread > 0).slice(0, 10);
+  if (live.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-0 border-b border-zinc-800/80 overflow-x-auto mb-3 scrollbar-hide">
+      <span className="shrink-0 text-[10px] font-bold uppercase tracking-widest text-zinc-600 pr-3 border-r border-zinc-800 mr-3 py-2">
+        Live
+      </span>
+      <div className="flex items-center gap-5 overflow-x-auto pb-2 pt-2">
+        {live.map((g, i) => {
+          const pts = g.realMoneySpread;
+          const arrowColor = pts >= 5 ? "text-green-400" : "text-amber-400";
+          return (
+            <span key={g.id} className="flex items-center gap-1.5 shrink-0 text-xs">
+              {i > 0 && <span className="text-zinc-800 select-none">·</span>}
+              <span className="text-zinc-400 max-w-[180px] truncate">{g.label}</span>
+              <span className="font-mono tabular-nums text-amber-400 font-bold">{pts.toFixed(1)}pt</span>
+              <span className={`${arrowColor} text-[10px]`}>▲</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Compact row ───────────────────────────────────────────────────────────────
+
+function CompactRow({
+  group,
+  isExpanded,
+  onToggle,
+}: {
+  group: RankedGroup;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  const realMarkets = group.markets.filter((m) => !m.isPlayMoney);
+  const hasSpread = group.realMoneySpread > 0;
+
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-zinc-900/70 transition-colors border-b border-zinc-800/50"
+      >
+        {/* Event label */}
+        <span className="flex-1 min-w-0 text-sm font-medium text-zinc-100 truncate leading-tight">
+          {group.label}
+        </span>
+
+        {/* Venue chips — desktop only */}
+        <div className="hidden sm:flex gap-1 shrink-0">
+          {realMarkets.map((m) => (
+            <span
+              key={m.venue}
+              className={`px-1.5 py-0.5 text-[10px] font-bold tracking-wide rounded border border-current ${VENUE_COLORS[m.venue] ?? "text-zinc-500"}`}
+            >
+              {VENUE_LABELS[m.venue] ?? m.venue}
+            </span>
+          ))}
+        </div>
+
+        {/* Spread value */}
+        <span
+          className={`font-mono tabular-nums text-xs w-16 text-right shrink-0 ${
+            hasSpread ? "text-amber-400 font-bold" : "text-zinc-600"
+          }`}
+        >
+          {hasSpread ? `${group.realMoneySpread.toFixed(1)} pt` : "—"}
+        </span>
+
+        {/* Spread badge */}
+        <div className="shrink-0">
+          <SpreadBadge pts={group.realMoneySpread} isRealMoney={hasSpread} />
+        </div>
+
+        {/* Expand toggle */}
+        <span className="text-zinc-600 text-[10px] w-3 shrink-0 select-none">
+          {isExpanded ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {isExpanded && (
+        <div className="border-b border-zinc-800/50 p-3 bg-zinc-950/40">
+          <MispricingCard group={group} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Board ─────────────────────────────────────────────────────────────────────
 
 export function MispricingsBoard() {
   const [groups, setGroups] = useState<RankedGroup[]>([]);
@@ -11,6 +123,15 @@ export function MispricingsBoard() {
   const [creditsSpent, setCreditsSpent] = useState(0);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  const toggle = (id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
 
   const load = useCallback(async () => {
     try {
@@ -45,23 +166,26 @@ export function MispricingsBoard() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {/* Spread ticker */}
+      {groups.length > 0 && <SpreadTicker groups={groups} />}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <h2 className="text-amber-400 font-bold text-sm uppercase tracking-widest">
-            MISPRICINGS
+            Mispricings
           </h2>
           {groups.length > 0 && (
-            <span className="text-zinc-600 text-xs">{groups.length} match groups</span>
+            <span className="text-zinc-600 text-xs font-mono">{groups.length} groups</span>
           )}
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className="text-zinc-600 tabular-nums">
-            {creditsSpent} credits used
+          <span className="text-zinc-600 font-mono tabular-nums">
+            {creditsSpent} credits
           </span>
           {lastFetched && (
-            <span className="text-zinc-700 tabular-nums">
+            <span className="text-zinc-700 font-mono tabular-nums">
               {lastFetched.toLocaleTimeString()}
             </span>
           )}
@@ -86,9 +210,22 @@ export function MispricingsBoard() {
           <p>Click ↻ refresh to pull live markets and run LLM matching.</p>
         </div>
       ) : (
-        <div className="grid gap-3">
-          {groups.map((g, i) => (
-            <MispricingCard key={g.id} group={g} isHero={i === 0} />
+        <div className="border border-zinc-800 rounded-lg overflow-hidden">
+          {/* Column header */}
+          <div className="flex items-center gap-3 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/80">
+            <span className="flex-1 text-[10px] uppercase tracking-widest text-zinc-600">Event</span>
+            <span className="hidden sm:block w-20 text-[10px] uppercase tracking-widest text-zinc-600 text-right">Venues</span>
+            <span className="font-mono w-16 text-[10px] uppercase tracking-widest text-zinc-600 text-right">Spread</span>
+            <span className="w-24 text-[10px] uppercase tracking-widest text-zinc-600 text-right">Signal</span>
+            <span className="w-3" />
+          </div>
+          {groups.map((g) => (
+            <CompactRow
+              key={g.id}
+              group={g}
+              isExpanded={expanded.has(g.id)}
+              onToggle={() => toggle(g.id)}
+            />
           ))}
         </div>
       )}
