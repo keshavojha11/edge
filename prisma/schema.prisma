@@ -16,6 +16,8 @@ model Market {
   closeTime     DateTime?
   liquidity     Float?
   isPlayMoney   Boolean   @default(false)
+  category      String    @default("other") // politics | crypto | sports | econ | other
+  topic         String?   // cross-venue bucket key (e.g. "fed-cuts-2026")
   runId         String?
   snapshotAt    DateTime  @default(now())
   url           String
@@ -26,6 +28,7 @@ model Market {
   @@index([venue])
   @@index([snapshotAt])
   @@index([runId])
+  @@index([category])
 }
 
 model MatchGroup {
@@ -36,6 +39,8 @@ model MatchGroup {
   notedDifferences String
   maxSpread        Float
   realMoneySpread  Float    @default(0)
+  tier             Int      @default(3) // 1 real-money, 2 vs crowd, 3 other
+  category         String   @default("other")
   runId            String?
   updatedAt        DateTime @updatedAt
   createdAt        DateTime @default(now())

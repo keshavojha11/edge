@@ -3,9 +3,12 @@ import { getCreditsSpent } from "@/lib/wire";
 
 export async function GET() {
   try {
-    const { groups, source, lastUpdated } = await getBoardState();
+    const { groups, tier1, tier2, tier3, source, lastUpdated } = await getBoardState();
     return Response.json({
-      groups,
+      groups,                    // back-compat: tier1 + tier2
+      tier1,
+      tier2,
+      tier3,
       source,                    // "live" | "demo"
       isDemo: source === "demo", // back-compat for the UI pill
       lastUpdated,

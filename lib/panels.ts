@@ -28,11 +28,8 @@ export const PANEL_JOBS: PanelJob[] = [
   { kind: "panel:fedfunds",  label: "FRED · Fed funds",      actionId: "fr_series",             params: { series_id: "FEDFUNDS", limit: 2 } },
   { kind: "panel:unrate",    label: "FRED · Unemployment",   actionId: "fr_series",             params: { series_id: "UNRATE", limit: 2 } },
 
-  // ── Trending across venues ──────────────────────────────────────────────────
-  { kind: "panel:trending:kalshi",     label: "Trending · Kalshi",     actionId: "kl_events",       params: { limit: 30, status: "open", with_nested_markets: true } },
-  { kind: "panel:trending:polymarket", label: "Trending · Polymarket", actionId: "pm_get_markets",  params: { limit: 30, closed: false, order: "volume" } },
-  { kind: "panel:trending:manifold",   label: "Trending · Manifold",   actionId: "mm_markets",      params: { limit: 60 } },
-  { kind: "panel:trending:robinhood",  label: "Trending · Robinhood",  actionId: "rh_get_markets",  params: { limit: 30, live_only: true } },
+  // Trending tabs are derived from the broad market pool after a run (see
+  // lib/run.ts deriveTrending) — no separate Wire calls needed.
 
   // ── Market context (news) ───────────────────────────────────────────────────
   { kind: "panel:news:cnbc",   label: "News · CNBC",        actionId: "cn_top_stories", params: { limit: 8 } },

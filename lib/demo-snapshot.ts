@@ -51,6 +51,8 @@ export const DEMO_GROUPS: RankedGroup[] = [
     ],
     maxSpread: 11,
     realMoneySpread: 8,
+    tier: 1 as const,
+    category: "econ",
     spreadDetails: [
       { venueA: "kalshi", venueB: "polymarket", outcomeName: "Yes", probA: 0.32, probB: 0.24, spreadPts: 8 },
     ],
@@ -89,6 +91,8 @@ export const DEMO_GROUPS: RankedGroup[] = [
     ],
     maxSpread: 6,
     realMoneySpread: 6,
+    tier: 1 as const,
+    category: "econ",
     spreadDetails: [
       { venueA: "kalshi", venueB: "robinhood", outcomeName: "Yes", probA: 0.62, probB: 0.56, spreadPts: 6 },
     ],
@@ -138,6 +142,8 @@ export const DEMO_GROUPS: RankedGroup[] = [
     ],
     maxSpread: 11,
     realMoneySpread: 2,
+    tier: 1 as const,
+    category: "crypto",
     spreadDetails: [
       { venueA: "polymarket", venueB: "kalshi", outcomeName: "Yes", probA: 0.41, probB: 0.39, spreadPts: 2 },
     ],

@@ -9,6 +9,10 @@
  * the whole run finishes in ~2-3 min across the async start/poll cycle.
  */
 import type { NormalizedMarket } from "./normalize/types";
+import { normalizeKalshi } from "./normalize/kalshi";
+import { normalizePolymarket } from "./normalize/polymarket";
+import { normalizeManifold } from "./normalize/manifold";
+import { normalizeRobinhood } from "./normalize/robinhood";
 
 export interface TargetJob {
   venue: NormalizedMarket["venue"];
@@ -18,6 +22,26 @@ export interface TargetJob {
   actionId: string;    // Wire action id
   params: Record<string, unknown>;
 }
+
+// ─── Broad pool jobs ────────────────────────────────────────────────────────────
+// Top markets by volume/liquidity + key categories across all 4 venues, written
+// to the Market table (tagged with runId) to feed full-pool matching, tiered
+// context rows, and the trending tabs. A few hundred markets total.
+export const POOL_JOBS: TargetJob[] = [
+  // Kalshi: broad open events (mixed categories)
+  // NB: kl_events silently returns 0 events at limit:200 — 100 is the working max (~560 nested markets).
+  { venue: "kalshi", kind: "pool_kalshi", event: "pool", label: "Kalshi · top open", actionId: "kl_events", params: { limit: 100, status: "open", with_nested_markets: true } },
+  // Polymarket: top by volume + top by liquidity (deduped on upsert)
+  { venue: "polymarket", kind: "pool_polymarket", event: "pool", label: "Polymarket · top volume", actionId: "pm_get_markets", params: { limit: 80, closed: false, order: "volume_num" } },
+  { venue: "polymarket", kind: "pool_polymarket", event: "pool", label: "Polymarket · top liquidity", actionId: "pm_get_markets", params: { limit: 80, closed: false, order: "liquidity_num" } },
+  // Manifold: broad + trending
+  { venue: "manifold", kind: "pool_manifold", event: "pool", label: "Manifold · markets", actionId: "mm_markets", params: { limit: 150 } },
+  { venue: "manifold", kind: "pool_manifold", event: "pool", label: "Manifold · trending", actionId: "mm_trending", params: { limit: 40, filter: "open" } },
+  // Robinhood: live + politics + economics categories
+  { venue: "robinhood", kind: "pool_robinhood", event: "pool", label: "Robinhood · live", actionId: "rh_get_markets", params: { limit: 50, live_only: true } },
+  { venue: "robinhood", kind: "pool_robinhood", event: "pool", label: "Robinhood · politics", actionId: "rh_get_markets", params: { limit: 30, live_only: true, category: "Politics" } },
+  { venue: "robinhood", kind: "pool_robinhood", event: "pool", label: "Robinhood · economics", actionId: "rh_get_markets", params: { limit: 30, live_only: true, category: "Economics" } },
+];
 
 export const TARGET_JOBS: TargetJob[] = [
   // ── Fed rate cuts in 2026 — the proven real-money spread ───────────────────
@@ -91,6 +115,17 @@ export function normalizeByKind(kind: string, payload: unknown): NormalizedMarke
   const p = payload as any;
 
   switch (kind) {
+    // ── Broad pool pulls → full venue normalizers ────────────────────────────
+    case "pool_kalshi":
+      return normalizeKalshi(p);
+    case "pool_polymarket":
+      return normalizePolymarket(p);
+    case "pool_manifold":
+      // mm_markets → {markets}; mm_trending may wrap differently — try both
+      return normalizeManifold(p?.markets ? p : { markets: p?.data?.markets ?? p?.markets ?? [] });
+    case "pool_robinhood":
+      return normalizeRobinhood(p);
+
     case "pm_market": {
       const m = p?.market ?? p;
       if (!m || !m.outcomes?.length) return [];

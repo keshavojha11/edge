@@ -1,4 +1,5 @@
 import { jsonChat } from "./llm";
+import { topicKey } from "./categorize";
 import type { NormalizedMarket } from "./normalize/types";
 
 export interface MatchedGroup {
@@ -9,6 +10,12 @@ export interface MatchedGroup {
   maxSpread: number;       // percentage points, all venues
   realMoneySpread: number; // percentage points, real-money venues only (ranking key)
   spreadDetails: SpreadDetail[];
+}
+
+// Tier 1: ≥2 distinct real-money venues; Tier 2: 1 real-money + Manifold crowd.
+export function tierOfGroup(g: MatchedGroup): 1 | 2 {
+  const realVenues = new Set(g.markets.filter((m) => !m.isPlayMoney).map((m) => m.venue));
+  return realVenues.size >= 2 ? 1 : 2;
 }
 
 export interface SpreadDetail {
@@ -59,64 +66,60 @@ Return ONLY valid JSON, no markdown:
 
 Only include groups with 2+ markets from DIFFERENT venues. Skip singletons. When uncertain, omit.`;
 
+/**
+ * Topic-bucketed cross-venue matcher.
+ *
+ * Blind interleaved batching can't reliably co-locate a Kalshi recession market
+ * and a Polymarket recession market in the same LLM batch. Instead we bucket
+ * markets by a coarse topicKey(), keep only buckets that span ≥2 venues, and
+ * LLM-verify each multi-venue bucket in parallel. The LLM applies the scope/
+ * date/structure guards and may split or reject a bucket. This finds genuine
+ * cross-venue pairs comprehensively and cheaply (LLM runs only on candidates).
+ */
 export async function matchMarkets(
   markets: NormalizedMarket[],
-  opts: { batchSize?: number; perVenueCap?: number } = {}
+  // opts kept for back-compat; bucketing ignores batchSize/perVenueCap
+  _opts: { batchSize?: number; perVenueCap?: number } = {}
 ): Promise<MatchedGroup[]> {
   if (markets.length === 0) return [];
 
-  const batchSize = opts.batchSize ?? 60;
-  const perVenueCap = opts.perVenueCap ?? 60;
-
-  // Each batch must contain markets from multiple venues.
-  // Strategy: cap per-venue (by liquidity desc), then interleave so
-  // every batch has all venues represented.
-  const byVenue: Record<string, NormalizedMarket[]> = {};
+  // Bucket by topic key; drop markets with no cross-venue topic.
+  const buckets = new Map<string, NormalizedMarket[]>();
   for (const m of markets) {
-    if (!byVenue[m.venue]) byVenue[m.venue] = [];
-    byVenue[m.venue].push(m);
+    const key = topicKey(m.title);
+    if (!key) continue;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(m);
   }
 
-  // Title patterns that indicate non-matchable intraday/price-bracket markets.
-  // These are Kalshi series like "ETH price at 12pm EDT?" — identical titles,
-  // high liquidity, but no cross-venue equivalent. Deduplicate before capping.
-  const SKIP_TITLE_RE =
-    /price (range|at) |close (at|above|below) \$|above \$\d|below \$\d|Up or Down|at \d+(am|pm)|O\/U \d|Spread:|Handicap|first inning|first blood|halftime/i;
-
-  const capped: NormalizedMarket[][] = Object.values(byVenue).map((ms) => {
-    // 1. Filter out obvious price-bracket / intraday / sports prop markets
-    const filtered = ms.filter((m) => !SKIP_TITLE_RE.test(m.title));
-
-    // 2. Title-dedup: keep highest-liquidity market per normalised title prefix
-    //    (handles Kalshi ETH/BTC bracket series with near-identical titles)
+  // Keep buckets spanning ≥2 distinct venues. Cap bucket size to keep prompts
+  // tight (dedupe near-identical titles, take highest-liquidity per title).
+  const candidates: Array<{ topic: string; markets: NormalizedMarket[] }> = [];
+  for (const [topic, ms] of buckets) {
+    const venues = new Set(ms.map((m) => m.venue));
+    if (venues.size < 2) continue;
     const seen = new Map<string, NormalizedMarket>();
-    for (const m of filtered.sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))) {
-      const key = m.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 40);
-      if (!seen.has(key)) seen.set(key, m);
+    for (const m of ms.sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))) {
+      const k = m.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 45);
+      if (!seen.has(k)) seen.set(k, m);
     }
-    return Array.from(seen.values()).slice(0, perVenueCap);
-  });
-
-  // Interleave: take one from each venue in round-robin
-  const interleaved: NormalizedMarket[] = [];
-  const maxLen = Math.max(...capped.map((c) => c.length));
-  for (let i = 0; i < maxLen; i++) {
-    for (const venueMarkets of capped) {
-      if (venueMarkets[i]) interleaved.push(venueMarkets[i]);
-    }
+    candidates.push({ topic, markets: Array.from(seen.values()).slice(0, 24) });
   }
 
-  // Chunk into batches — each chunk will have all venues mixed in
-  const batches = chunkMarkets(interleaved, batchSize);
-  console.log(`[match] ${interleaved.length} markets across ${capped.length} venues → ${batches.length} batch(es)`);
+  console.log(`[match] ${markets.length} markets → ${candidates.length} multi-venue topic buckets`);
+  if (candidates.length === 0) return [];
 
-  const allGroups: MatchedGroup[] = [];
-  for (const batch of batches) {
-    const groups = await matchBatch(batch);
-    allGroups.push(...groups);
-  }
+  // Verify all candidate buckets in parallel (one LLM call each).
+  const results = await Promise.all(
+    candidates.map((c) =>
+      matchBatch(c.markets).catch((e) => {
+        console.warn(`[match] bucket ${c.topic} failed: ${e}`);
+        return [] as MatchedGroup[];
+      })
+    )
+  );
 
-  return dedupeAndRank(allGroups);
+  return dedupeAndRank(results.flat());
 }
 
 async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> {
@@ -307,6 +310,19 @@ export interface RankedGroup {
   spreadDetails: SpreadDetail[];
   matchConfidence: number;
   notedDifferences: string[];
+  tier: 1 | 2 | 3;
+  category: string;
+}
+
+export interface Tier3Row {
+  id: string;
+  venue: string;
+  title: string;
+  url: string;
+  yesProb: number | null;
+  yesName: string;
+  liquidity: number | null;
+  category: string;
 }
 
 // Remove groups whose constituent markets no longer exist, or that have
@@ -371,15 +387,19 @@ export async function clearDemoGroups(): Promise<number> {
 }
 
 export interface BoardState {
-  groups: RankedGroup[];
+  groups: RankedGroup[];      // back-compat: tier1 + tier2 combined
+  tier1: RankedGroup[];
+  tier2: RankedGroup[];
+  tier3: Tier3Row[];
   source: "live" | "demo";
-  lastUpdated: string | null; // ISO timestamp of the live run, if any
+  lastUpdated: string | null;
 }
 
 /**
- * Board data: defaults to the most recent COMPLETED live run from Postgres.
- * Falls back to the labeled DEMO snapshot only when no completed run exists
- * (or DEMO_MODE forces it). Never mixes live and demo.
+ * Tiered board, defaulting to the most recent COMPLETED live run from Postgres.
+ * Tier 1: real-money (≥2 of K/P/R). Tier 2: real-money vs Manifold crowd.
+ * Tier 3: notable single-venue context rows (top unmatched by liquidity).
+ * Falls back to the labeled DEMO snapshot only when no completed run exists.
  */
 export async function getBoardState(): Promise<BoardState> {
   const forceDemo = process.env.DEMO_MODE === "true";
@@ -392,15 +412,29 @@ export async function getBoardState(): Promise<BoardState> {
     });
     if (lastRun) {
       const groups = await loadGroupsForRun(lastRun.id);
-      if (groups.length > 0) {
-        return { groups, source: "live", lastUpdated: lastRun.createdAt.toISOString() };
+      const tier1 = groups.filter((g) => g.tier === 1);
+      const tier2 = groups.filter((g) => g.tier === 2);
+      const tier3 = await loadTier3(lastRun.id, groups);
+      if (tier1.length + tier2.length + tier3.length > 0) {
+        return {
+          groups, tier1, tier2, tier3,
+          source: "live", lastUpdated: lastRun.createdAt.toISOString(),
+        };
       }
     }
   }
 
   // Fallback: labeled sample snapshot
   const { DEMO_GROUPS } = await import("./demo-snapshot");
-  return { groups: DEMO_GROUPS, source: "demo", lastUpdated: null };
+  const demo = DEMO_GROUPS as RankedGroup[];
+  return {
+    groups: demo,
+    tier1: demo.filter((g) => g.tier === 1),
+    tier2: demo.filter((g) => g.tier === 2),
+    tier3: [],
+    source: "demo",
+    lastUpdated: null,
+  };
 }
 
 async function loadGroupsForRun(runId: string): Promise<RankedGroup[]> {
@@ -408,7 +442,7 @@ async function loadGroupsForRun(runId: string): Promise<RankedGroup[]> {
   const groups = await prisma.matchGroup.findMany({
     where: { runId },
     orderBy: { realMoneySpread: "desc" },
-    take: 50,
+    take: 80,
   });
 
   const result: RankedGroup[] = [];
@@ -447,10 +481,62 @@ async function loadGroupsForRun(runId: string): Promise<RankedGroup[]> {
       matchConfidence: g.matchConfidence,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       notedDifferences: JSON.parse(g.notedDifferences as any),
+      tier: (g as { tier?: number }).tier === 1 ? 1 : 2,
+      category: (g as { category?: string }).category ?? "other",
     });
   }
-  result.sort((a, b) => b.realMoneySpread - a.realMoneySpread);
+  // Tier 1 first (by real-money spread), then tier 2 (by max spread)
+  result.sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    return (b.tier === 1 ? b.realMoneySpread : b.maxSpread) - (a.tier === 1 ? a.realMoneySpread : a.maxSpread);
+  });
   return result;
+}
+
+// Tier 3: notable single-venue context rows — top markets by liquidity from the
+// run that are NOT already part of a matched group. Real data, clearly labeled.
+async function loadTier3(runId: string, groups: RankedGroup[]): Promise<Tier3Row[]> {
+  const { prisma } = await import("./db");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows: any[] = await prisma.market.findMany({ where: { runId } });
+
+  const usedTitles = new Set<string>();
+  for (const g of groups) for (const m of g.markets) usedTitles.add(m.title);
+
+  // Build candidate rows: real-money, unmatched, "interesting" odds (not
+  // near-certain longshots), deduped by title prefix.
+  const seen = new Set<string>();
+  type Row = Tier3Row & { _liq: number };
+  const byVenue: Record<string, Row[]> = {};
+  for (const m of rows.sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))) {
+    if (m.isPlayMoney || usedTitles.has(m.title) || (m.liquidity ?? 0) <= 0) continue;
+    const outcomes = JSON.parse(m.outcomesJson);
+    const yes = outcomes[0]?.impliedProb ?? null;
+    if (yes == null || yes < 0.04 || yes > 0.96) continue; // skip near-certain
+    const key = m.title.toLowerCase().replace(/[^a-z0-9 ]/g, "").slice(0, 30);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    (byVenue[m.venue] ??= []).push({
+      id: m.id, venue: m.venue, title: m.title, url: m.url,
+      yesProb: yes, yesName: outcomes[0]?.name ?? "Yes",
+      liquidity: m.liquidity, category: m.category ?? "other", _liq: m.liquidity ?? 0,
+    });
+  }
+
+  // Round-robin across venues so the context section is diverse, not one venue.
+  const venues = Object.keys(byVenue);
+  const out: Tier3Row[] = [];
+  for (let i = 0; out.length < 40 && venues.some((v) => byVenue[v][i]); i++) {
+    for (const v of venues) {
+      const r = byVenue[v][i];
+      if (r && out.length < 40) {
+        const { _liq, ...row } = r;
+        void _liq;
+        out.push(row);
+      }
+    }
+  }
+  return out;
 }
 
 // Back-compat wrapper used by the chat route
@@ -461,13 +547,6 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function chunkMarkets(markets: NormalizedMarket[], size: number): NormalizedMarket[][] {
-  const chunks: NormalizedMarket[][] = [];
-  for (let i = 0; i < markets.length; i += size) {
-    chunks.push(markets.slice(i, i + size));
-  }
-  return chunks;
-}
 
 function dedupeAndRank(groups: MatchedGroup[]): MatchedGroup[] {
   // Remove groups whose market set is a subset of a larger group

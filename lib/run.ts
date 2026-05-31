@@ -9,16 +9,19 @@
  */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { submitTask, pollJobOnce } from "./wire";
-import { TARGET_JOBS } from "./targets";
+import { TARGET_JOBS, POOL_JOBS } from "./targets";
 import { normalizeByKind } from "./targets";
 import { PANEL_JOBS, PANEL_KINDS, normalizePanel } from "./panels";
-import { matchMarkets } from "./match";
+import { matchMarkets, tierOfGroup } from "./match";
+import { categorize } from "./categorize";
+import { topicKey } from "./categorize";
 import type { NormalizedMarket } from "./normalize/types";
 
 const IN_FLIGHT_WINDOW_MS = 5 * 60 * 1000;
 
 const ALL_JOBS = [
   ...TARGET_JOBS.map((j) => ({ ...j })),
+  ...POOL_JOBS.map((j) => ({ ...j })),
   ...PANEL_JOBS.map((j) => ({ venue: "panel", event: "panel", ...j })),
 ];
 
@@ -36,17 +39,36 @@ export async function startRun(opts: { dedupe?: boolean } = {}): Promise<{ runId
 
   const run = await prisma.run.create({ data: { status: "running" } });
 
+  // Submit in small concurrent waves with a stagger + 429 retry. Submitting all
+  // ~21 tasks at once trips Wire's rate limit (429) and silently drops jobs
+  // (Kalshi was the usual casualty). Waves of 4 keep every job submitted.
   const submitted: Array<{ ok: boolean; job: any; wireJobId?: string; error?: string }> = [];
-  await Promise.all(
-    ALL_JOBS.map(async (job) => {
-      try {
-        const wireJobId = await submitTask(job.actionId, job.params);
-        submitted.push({ ok: true, job, wireJobId });
-      } catch (e) {
-        submitted.push({ ok: false, job, error: e instanceof Error ? e.message : String(e) });
-      }
-    })
-  );
+  const WAVE = 3;
+  for (let i = 0; i < ALL_JOBS.length; i += WAVE) {
+    const wave = ALL_JOBS.slice(i, i + WAVE);
+    await Promise.all(
+      wave.map(async (job) => {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const wireJobId = await submitTask(job.actionId, job.params);
+            submitted.push({ ok: true, job, wireJobId });
+            return;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            if (msg === "RATE_LIMIT_EXCEEDED" && attempt < 2) {
+              await new Promise((r) => setTimeout(r, 4000 * (attempt + 1)));
+              continue;
+            }
+            if (attempt === 2 || msg !== "RATE_LIMIT_EXCEEDED") {
+              submitted.push({ ok: false, job, error: msg });
+              return;
+            }
+          }
+        }
+      })
+    );
+    if (i + WAVE < ALL_JOBS.length) await new Promise((r) => setTimeout(r, 800));
+  }
 
   for (const s of submitted) {
     await prisma.ingestJob.create({
@@ -140,16 +162,18 @@ async function upsertRunMarkets(markets: NormalizedMarket[], runId: string) {
   if (markets.length === 0) return;
   const { prisma } = await import("./db");
   for (const m of markets) {
+    const category = categorize(m.title);
+    const topic = topicKey(m.title);
     await prisma.market.upsert({
       where: { venue_venueMarketId: { venue: m.venue, venueMarketId: m.venueMarketId } },
       update: {
         title: m.title, outcomesJson: JSON.stringify(m.outcomes), closeTime: m.closeTime,
-        liquidity: m.liquidity, isPlayMoney: m.isPlayMoney, runId, snapshotAt: new Date(), url: m.url,
+        liquidity: m.liquidity, isPlayMoney: m.isPlayMoney, category, topic, runId, snapshotAt: new Date(), url: m.url,
       },
       create: {
         venue: m.venue, venueMarketId: m.venueMarketId, title: m.title,
         outcomesJson: JSON.stringify(m.outcomes), closeTime: m.closeTime,
-        liquidity: m.liquidity, isPlayMoney: m.isPlayMoney, runId, url: m.url,
+        liquidity: m.liquidity, isPlayMoney: m.isPlayMoney, category, topic, runId, url: m.url,
       },
     });
   }
@@ -164,7 +188,7 @@ async function runMatching(runId: string) {
     outcomes: JSON.parse(m.outcomesJson), closeTime: m.closeTime,
     liquidity: m.liquidity, isPlayMoney: m.isPlayMoney ?? false, url: m.url,
   }));
-  const groups = await matchMarkets(markets, { batchSize: 60, perVenueCap: 60 });
+  const groups = await matchMarkets(markets);
   for (const g of groups) {
     const dbIds: string[] = [];
     for (const m of g.markets) {
@@ -178,8 +202,41 @@ async function runMatching(runId: string) {
       data: {
         label: g.label, marketIds: JSON.stringify(dbIds), matchConfidence: g.matchConfidence,
         notedDifferences: JSON.stringify(g.notedDifferences), maxSpread: g.maxSpread,
-        realMoneySpread: g.realMoneySpread, runId,
+        realMoneySpread: g.realMoneySpread, tier: tierOfGroup(g),
+        category: categorize(g.label), runId,
       },
+    });
+  }
+
+  // Derive trending tabs from the broad pool (top 12 per venue by liquidity) —
+  // no extra Wire calls. Cached for the page-load read.
+  await deriveTrending(rows);
+}
+
+async function deriveTrending(rows: any[]) {
+  const { prisma } = await import("./db");
+  const venues = ["kalshi", "polymarket", "robinhood", "manifold"];
+  for (const venue of venues) {
+    const top = rows
+      .filter((m) => m.venue === venue)
+      .sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))
+      .slice(0, 12)
+      .map((m) => {
+        const outcomes = JSON.parse(m.outcomesJson);
+        return {
+          venue: m.venue, title: m.title, url: m.url,
+          yesProb: outcomes[0]?.impliedProb ?? null,
+          yesName: outcomes[0]?.name ?? "Yes",
+          isPlayMoney: m.isPlayMoney ?? false,
+          category: m.category ?? "other",
+        };
+      });
+    if (top.length === 0) continue;
+    const key = `trending:${venue}`;
+    await prisma.panelCache.upsert({
+      where: { key },
+      update: { payloadJson: JSON.stringify(top), fetchedAt: new Date() },
+      create: { key, payloadJson: JSON.stringify(top), creditsSpent: 0 },
     });
   }
 }

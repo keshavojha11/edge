@@ -9,6 +9,8 @@ interface KalshiMarket {
   no_bid_dollars?: string;
   last_price_dollars: string;
   liquidity_dollars: string;
+  volume_fp?: string;
+  open_interest_fp?: string;
   close_time: string;
   status: string;
   market_type: string;
@@ -50,7 +52,13 @@ export function normalizeKalshi(raw: KalshiEventsPayload): NormalizedMarket[] {
           { name: "No", impliedProb: 1 - yesMid },
         ],
         closeTime: m.close_time ? new Date(m.close_time) : null,
-        liquidity: parseFloat(m.liquidity_dollars ?? "0") || null,
+        // Kalshi often reports liquidity_dollars as 0 in the feed; fall back to
+        // traded volume (then open interest) as an activity proxy for ranking.
+        liquidity:
+          parseFloat(m.liquidity_dollars ?? "0") ||
+          parseFloat(m.volume_fp ?? "0") ||
+          parseFloat(m.open_interest_fp ?? "0") ||
+          null,
         isPlayMoney: false,
         url: `https://kalshi.com/markets/${m.ticker}`,
       });
