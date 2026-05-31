@@ -51,6 +51,7 @@ export function normalizeKalshi(raw: KalshiEventsPayload): NormalizedMarket[] {
         ],
         closeTime: m.close_time ? new Date(m.close_time) : null,
         liquidity: parseFloat(m.liquidity_dollars ?? "0") || null,
+        isPlayMoney: false,
         url: `https://kalshi.com/markets/${m.ticker}`,
       });
     }

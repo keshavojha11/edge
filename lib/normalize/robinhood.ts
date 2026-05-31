@@ -60,6 +60,7 @@ export function normalizeRobinhood(raw: RobinhoodPayload): NormalizedMarket[] {
         ? new Date(firstContract.expiration_date)
         : null,
       liquidity: openInterest > 0 ? openInterest : null,
+      isPlayMoney: false,
       url: `https://robinhood.com/predictions/events/${event.slug}`,
     });
   }

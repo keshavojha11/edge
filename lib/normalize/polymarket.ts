@@ -41,6 +41,7 @@ export function normalizePolymarket(raw: PolymarketPayload): NormalizedMarket[] 
       outcomes,
       closeTime: m.end_date ? new Date(m.end_date) : null,
       liquidity: m.liquidity ?? null,
+      isPlayMoney: false,
       url: `https://polymarket.com/event/${m.slug}`,
     });
   }

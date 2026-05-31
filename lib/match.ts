@@ -6,7 +6,8 @@ export interface MatchedGroup {
   markets: NormalizedMarket[];
   matchConfidence: number; // 0–1
   notedDifferences: string[];
-  maxSpread: number; // percentage points
+  maxSpread: number;       // percentage points, all venues
+  realMoneySpread: number; // percentage points, real-money venues only (ranking key)
   spreadDetails: SpreadDetail[];
 }
 
@@ -141,6 +142,8 @@ async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> 
 
     const spreadDetails = computeSpreads(groupMarkets);
     const maxSpread = spreadDetails.reduce((max, s) => Math.max(max, s.spreadPts), 0);
+    // Headline spread: real-money venues only
+    const realMoneySpread = computeRealMoneySpread(groupMarkets);
 
     groups.push({
       label: g.label,
@@ -148,6 +151,7 @@ async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> 
       matchConfidence: g.confidence ?? 0.8,
       notedDifferences: g.notedDifferences ?? [],
       maxSpread,
+      realMoneySpread,
       spreadDetails,
     });
   }
@@ -156,6 +160,13 @@ async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> 
 }
 
 // ─── Spread computation ───────────────────────────────────────────────────────
+
+export function computeRealMoneySpread(markets: NormalizedMarket[]): number {
+  const realMoney = markets.filter((m) => !m.isPlayMoney);
+  if (realMoney.length < 2) return 0;
+  const details = computeSpreads(realMoney);
+  return details.reduce((max, s) => Math.max(max, s.spreadPts), 0);
+}
 
 export function computeSpreads(markets: NormalizedMarket[]): SpreadDetail[] {
   const details: SpreadDetail[] = [];
@@ -221,6 +232,7 @@ export async function persistMatchGroups(groups: MatchedGroup[]): Promise<void> 
         matchConfidence: g.matchConfidence,
         notedDifferences: JSON.stringify(g.notedDifferences),
         maxSpread: g.maxSpread,
+        realMoneySpread: g.realMoneySpread,
       },
       create: {
         id: key,
@@ -229,6 +241,7 @@ export async function persistMatchGroups(groups: MatchedGroup[]): Promise<void> 
         matchConfidence: g.matchConfidence,
         notedDifferences: JSON.stringify(g.notedDifferences),
         maxSpread: g.maxSpread,
+        realMoneySpread: g.realMoneySpread,
       },
     });
   }
@@ -246,8 +259,10 @@ export interface RankedGroup {
     outcomes: Array<{ name: string; impliedProb: number }>;
     liquidity: number | null;
     liquidityNote?: string;
+    isPlayMoney: boolean;
   }>;
   maxSpread: number;
+  realMoneySpread: number; // headline figure — real-money venues only
   spreadDetails: SpreadDetail[];
   matchConfidence: number;
   notedDifferences: string[];
@@ -256,8 +271,9 @@ export interface RankedGroup {
 export async function getRankedGroups(): Promise<RankedGroup[]> {
   const { prisma } = await import("./db");
 
+  // Sort by realMoneySpread so play-money-inflated spreads don't dominate
   const groups = await prisma.matchGroup.findMany({
-    orderBy: { maxSpread: "desc" },
+    orderBy: { realMoneySpread: "desc" },
     take: 50,
   });
 
@@ -280,6 +296,7 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
       outcomes: JSON.parse(m.outcomesJson),
       closeTime: m.closeTime,
       liquidity: m.liquidity,
+      isPlayMoney: m.isPlayMoney ?? false,
       url: m.url,
     }));
 
@@ -292,8 +309,10 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
         url: m.url,
         outcomes: m.outcomes,
         liquidity: m.liquidity,
+        isPlayMoney: m.isPlayMoney,
       })),
       maxSpread: g.maxSpread,
+      realMoneySpread: (g as any).realMoneySpread ?? 0,
       spreadDetails: computeSpreads(normalized),
       matchConfidence: g.matchConfidence,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

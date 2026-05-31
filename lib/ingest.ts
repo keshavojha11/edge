@@ -61,6 +61,7 @@ async function upsertMarkets(markets: NormalizedMarket[]): Promise<void> {
         outcomesJson: JSON.stringify(m.outcomes),
         closeTime: m.closeTime,
         liquidity: m.liquidity,
+        isPlayMoney: m.isPlayMoney,
         snapshotAt: new Date(),
         url: m.url,
       },
@@ -71,6 +72,7 @@ async function upsertMarkets(markets: NormalizedMarket[]): Promise<void> {
         outcomesJson: JSON.stringify(m.outcomes),
         closeTime: m.closeTime,
         liquidity: m.liquidity,
+        isPlayMoney: m.isPlayMoney,
         url: m.url,
       },
     });

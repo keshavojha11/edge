@@ -15,6 +15,7 @@ model Market {
   outcomesJson  String
   closeTime     DateTime?
   liquidity     Float?
+  isPlayMoney   Boolean   @default(false)
   snapshotAt    DateTime  @default(now())
   url           String
   createdAt     DateTime  @default(now())
@@ -31,12 +32,14 @@ model MatchGroup {
   marketIds        String
   matchConfidence  Float
   notedDifferences String
-  maxSpread        Float
+  maxSpread        Float    // includes play-money venues
+  realMoneySpread  Float    @default(0) // real-money venues only (ranking key)
   updatedAt        DateTime @updatedAt
   createdAt        DateTime @default(now())
 
   watches Watch[]
 
+  @@index([realMoneySpread])
   @@index([maxSpread])
 }
 

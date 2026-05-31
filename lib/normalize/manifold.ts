@@ -40,6 +40,7 @@ export function normalizeManifold(raw: ManifoldPayload): NormalizedMarket[] {
       closeTime: m.closeTime ? new Date(m.closeTime) : null,
       liquidity: m.totalLiquidity ?? null,
       liquidityNote: "Mana (play money, not USD)",
+      isPlayMoney: true,
       url: m.url,
     });
   }
