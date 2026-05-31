@@ -2,11 +2,12 @@ import "dotenv/config";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { PrismaClient } = require("../app/generated/prisma/client");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PrismaBetterSqlite3 } = require("@prisma/adapter-better-sqlite3");
+const { PrismaPg } = require("@prisma/adapter-pg");
 
 function createPrisma() {
-  const url = process.env.DATABASE_URL ?? "file:./dev.db";
-  const adapter = new PrismaBetterSqlite3({ url });
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("DATABASE_URL is not set");
+  const adapter = new PrismaPg({ connectionString });
   return new PrismaClient({ adapter });
 }
 

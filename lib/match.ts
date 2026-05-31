@@ -370,35 +370,52 @@ export async function clearDemoGroups(): Promise<number> {
   return demoGroups.length;
 }
 
-export async function getRankedGroups(): Promise<RankedGroup[]> {
-  // DEMO_MODE: serve the static snapshot directly — no DB dependency.
-  // This keeps the deployed board populated on serverless (ephemeral SQLite)
-  // and is clearly labeled "SAMPLE SNAPSHOT" in the UI via the isDemo flag.
-  if (process.env.DEMO_MODE === "true") {
-    const { DEMO_GROUPS } = await import("./demo-snapshot");
-    return DEMO_GROUPS;
+export interface BoardState {
+  groups: RankedGroup[];
+  source: "live" | "demo";
+  lastUpdated: string | null; // ISO timestamp of the live run, if any
+}
+
+/**
+ * Board data: defaults to the most recent COMPLETED live run from Postgres.
+ * Falls back to the labeled DEMO snapshot only when no completed run exists
+ * (or DEMO_MODE forces it). Never mixes live and demo.
+ */
+export async function getBoardState(): Promise<BoardState> {
+  const forceDemo = process.env.DEMO_MODE === "true";
+
+  if (!forceDemo) {
+    const { prisma } = await import("./db");
+    const lastRun = await prisma.run.findFirst({
+      where: { status: "completed" },
+      orderBy: { createdAt: "desc" },
+    });
+    if (lastRun) {
+      const groups = await loadGroupsForRun(lastRun.id);
+      if (groups.length > 0) {
+        return { groups, source: "live", lastUpdated: lastRun.createdAt.toISOString() };
+      }
+    }
   }
 
+  // Fallback: labeled sample snapshot
+  const { DEMO_GROUPS } = await import("./demo-snapshot");
+  return { groups: DEMO_GROUPS, source: "demo", lastUpdated: null };
+}
+
+async function loadGroupsForRun(runId: string): Promise<RankedGroup[]> {
   const { prisma } = await import("./db");
-
-  // Live only: exclude any demo- prefixed groups
-  const whereClause = { id: { not: { startsWith: "demo-" } } };
-
   const groups = await prisma.matchGroup.findMany({
-    where: whereClause,
+    where: { runId },
     orderBy: { realMoneySpread: "desc" },
     take: 50,
   });
 
   const result: RankedGroup[] = [];
-
   for (const g of groups) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const marketIds: string[] = JSON.parse(g.marketIds as any);
-    const markets = await prisma.market.findMany({
-      where: { id: { in: marketIds } },
-    });
-
+    const markets = await prisma.market.findMany({ where: { id: { in: marketIds } } });
     if (markets.length < 2) continue;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -413,19 +430,6 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
       url: m.url,
     }));
 
-    // Always recompute realMoneySpread from live isPlayMoney flags —
-    // stored value may be stale (created before backfill or schema change)
-    const liveRealMoneySpread = computeRealMoneySpread(normalized);
-
-    // Bug 2 guard: update stored value if it differs significantly
-    const stored = (g as Record<string, unknown>).realMoneySpread as number ?? 0;
-    if (Math.abs(stored - liveRealMoneySpread) > 0.5) {
-      await prisma.matchGroup.update({
-        where: { id: g.id },
-        data: { realMoneySpread: liveRealMoneySpread },
-      }).catch(() => null);
-    }
-
     result.push({
       id: g.id,
       label: g.label,
@@ -438,17 +442,21 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
         isPlayMoney: m.isPlayMoney,
       })),
       maxSpread: g.maxSpread,
-      realMoneySpread: liveRealMoneySpread,
+      realMoneySpread: computeRealMoneySpread(normalized),
       spreadDetails: computeSpreads(normalized),
       matchConfidence: g.matchConfidence,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       notedDifferences: JSON.parse(g.notedDifferences as any),
     });
   }
-
-  // Sort by live realMoneySpread (recomputed above, not stale stored value)
   result.sort((a, b) => b.realMoneySpread - a.realMoneySpread);
   return result;
+}
+
+// Back-compat wrapper used by the chat route
+export async function getRankedGroups(): Promise<RankedGroup[]> {
+  const { groups } = await getBoardState();
+  return groups;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

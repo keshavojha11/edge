@@ -137,16 +137,30 @@ function CompactRow({
 
 // ── Board ─────────────────────────────────────────────────────────────────────
 
+interface JobProgress {
+  venue: string;
+  label: string;
+  status: string;
+  error?: string | null;
+}
+
+const VENUE_DOT: Record<string, string> = {
+  kalshi: "bg-blue-400",
+  polymarket: "bg-violet-400",
+  manifold: "bg-zinc-500",
+  robinhood: "bg-green-400",
+};
+
 export function MispricingsBoard() {
   const [groups, setGroups] = useState<RankedGroup[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [creditsSpent, setCreditsSpent] = useState(0);
-  const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [running, setRunning] = useState(false);
+  const [source, setSource] = useState<"live" | "demo">("demo");
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [isDemo, setIsDemo] = useState(false);
-  const [showLiveNote, setShowLiveNote] = useState(false);
+  const [jobs, setJobs] = useState<JobProgress[]>([]);
+  const [runStatus, setRunStatus] = useState<string>("");
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -161,15 +175,14 @@ export function MispricingsBoard() {
       const res = await fetch("/api/mispricings");
       const data = (await res.json()) as {
         groups?: RankedGroup[];
-        creditsSpent?: number;
-        isDemo?: boolean;
+        source?: "live" | "demo";
+        lastUpdated?: string | null;
         error?: string;
       };
       if (data.error) throw new Error(data.error);
       setGroups(data.groups ?? []);
-      setCreditsSpent(data.creditsSpent ?? 0);
-      setIsDemo(data.isDemo ?? false);
-      setLastFetched(new Date());
+      setSource(data.source ?? "demo");
+      setLastUpdated(data.lastUpdated ?? null);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -180,41 +193,98 @@ export function MispricingsBoard() {
     load().finally(() => setLoading(false));
   }, [load]);
 
-  async function refresh() {
-    setRefreshing(true);
+  // P0: genuine async live run — /start submits Wire tasks, then poll /status
+  // every 3s. No single request exceeds 60s; total run ~2-3 min.
+  async function runLive() {
+    if (running) return;
+    setRunning(true);
+    setError(null);
+    setRunStatus("submitting Wire tasks…");
+    setJobs([]);
     try {
-      // Ingest + run matching in sequence
-      await fetch("/api/ingest?force=true", { method: "POST" });
-      await fetch("/api/match", { method: "POST" });
-      await load();
+      const startRes = await fetch("/api/ingest/start", { method: "POST" });
+      const start = (await startRes.json()) as { runId?: string; error?: string };
+      if (!start.runId) throw new Error(start.error ?? "failed to start run");
+      const runId = start.runId;
+
+      // Poll until done (cap ~4 min of polling)
+      const deadline = Date.now() + 4 * 60 * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const sRes = await fetch(`/api/ingest/status?run=${runId}`);
+        const s = (await sRes.json()) as {
+          status?: string;
+          done?: boolean;
+          jobs?: JobProgress[];
+          groups?: RankedGroup[];
+        };
+        setJobs(s.jobs ?? []);
+        setRunStatus(s.status ?? "polling");
+        if (s.groups && s.groups.length > 0) {
+          setGroups(s.groups);
+          setSource("live");
+        }
+        if (s.done) {
+          await load(); // pull final board (latest completed run)
+          break;
+        }
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setRefreshing(false);
+      setRunning(false);
+      setRunStatus("");
     }
   }
 
   return (
     <div className="space-y-3">
-      {/* DEMO_MODE label — P1 requirement: never misrepresent sample data as live */}
-      {isDemo && (
-        <div className="rounded border border-yellow-600/40 bg-yellow-600/10 px-3 py-1.5 space-y-1">
-          <div className="flex items-center gap-2">
-            <span className="text-yellow-500 font-bold text-xs uppercase tracking-widest">Sample snapshot</span>
-            <span className="text-yellow-600/70 text-xs">— illustrative data, not live prices.</span>
-            <button
-              onClick={() => setShowLiveNote((v) => !v)}
-              className="ml-auto text-yellow-600 text-xs underline underline-offset-2 hover:text-yellow-400"
-            >
-              How to run live →
-            </button>
-          </div>
-          {showLiveNote && (
-            <p className="text-[11px] text-yellow-600/60 leading-relaxed pt-1 border-t border-yellow-600/20">
-              Live mode pulls real odds via Anakin Wire, but each Wire job takes ~2&nbsp;min — longer than this
-              serverless function&apos;s limit. Run live locally: clone the repo, set <span className="font-mono">DEMO_MODE=false</span>,
-              then <span className="font-mono">npm run dev</span> and POST <span className="font-mono">/api/ingest?force=true</span>.
-              A verified live result (Polymarket 1.1% vs Robinhood 8.7% on &ge;4 Fed cuts in 2026, a 7.5pt spread) is in the README.
-            </p>
+      {/* Source banner: LIVE (with timestamp) or labeled SAMPLE SNAPSHOT */}
+      {source === "demo" ? (
+        <div className="flex items-center gap-2 rounded border border-yellow-600/40 bg-yellow-600/10 px-3 py-1.5">
+          <span className="text-yellow-500 font-bold text-xs uppercase tracking-widest">Sample snapshot</span>
+          <span className="text-yellow-600/70 text-xs">— illustrative data, not live. Click Run live for real Wire prices.</span>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded border border-green-700/40 bg-green-900/10 px-3 py-1.5">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60 animate-ping" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-green-400" />
+          </span>
+          <span className="text-green-400 font-bold text-xs uppercase tracking-widest">Live</span>
+          {lastUpdated && (
+            <span className="text-green-600/70 text-xs font-mono">
+              last updated {new Date(lastUpdated).toLocaleString()}
+            </span>
           )}
+        </div>
+      )}
+
+      {/* Live-run progress strip */}
+      {(running || jobs.length > 0) && (
+        <div className="rounded border border-zinc-800 bg-zinc-900/50 px-3 py-2 space-y-1.5">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-amber-400 font-bold uppercase tracking-widest">Live run</span>
+            <span className="text-zinc-500">{running ? runStatus || "polling…" : "complete"}</span>
+            {running && (
+              <span className="ml-auto inline-block h-3 w-3 rounded-full border-2 border-zinc-600 border-t-amber-400 animate-spin" />
+            )}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {jobs.map((j, i) => (
+              <span key={i} className="flex items-center gap-1.5 text-[11px]">
+                <span className={`h-1.5 w-1.5 rounded-full ${VENUE_DOT[j.venue] ?? "bg-zinc-500"}`} />
+                <span className="text-zinc-400">{j.label}</span>
+                <span className={
+                  j.status === "completed" ? "text-green-400"
+                  : j.status === "failed" ? "text-red-400"
+                  : "text-zinc-600"
+                }>
+                  {j.status === "completed" ? "✓" : j.status === "failed" ? "✕" : "polling…"}
+                </span>
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -232,23 +302,13 @@ export function MispricingsBoard() {
           )}
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className="text-zinc-600 font-mono tabular-nums">
-            {creditsSpent} credits
-          </span>
-          {lastFetched && (
-            <span className="text-zinc-700 font-mono tabular-nums">
-              {lastFetched.toLocaleTimeString()}
-            </span>
-          )}
-          {!isDemo && (
-            <button
-              onClick={refresh}
-              disabled={refreshing}
-              className="px-2 py-1 border border-zinc-700 rounded text-zinc-400 hover:border-amber-400/50 hover:text-amber-400 transition-colors disabled:opacity-40"
-            >
-              {refreshing ? "fetching..." : "↻ refresh"}
-            </button>
-          )}
+          <button
+            onClick={runLive}
+            disabled={running}
+            className="px-2.5 py-1 border border-amber-500/50 rounded text-amber-400 font-bold hover:bg-amber-400/10 transition-colors disabled:opacity-40"
+          >
+            {running ? "running live…" : "▶ Run live"}
+          </button>
         </div>
       </div>
 
@@ -260,7 +320,7 @@ export function MispricingsBoard() {
       ) : groups.length === 0 ? (
         <div className="text-zinc-600 text-xs py-8 text-center space-y-2">
           <p>No match groups yet.</p>
-          <p>Click ↻ refresh to pull live markets and run LLM matching.</p>
+          <p>Click ▶ Run live to pull real Wire prices and run LLM matching (~2-3 min).</p>
         </div>
       ) : (
         <div className="border border-zinc-800 rounded-lg overflow-hidden">

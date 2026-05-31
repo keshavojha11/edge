@@ -9,6 +9,10 @@ export default defineConfig({
     path: "prisma/migrations",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    // Use the direct (unpooled) connection for migrations; fall back to pooled.
+    url:
+      process.env["DATABASE_URL_UNPOOLED"] ??
+      process.env["POSTGRES_URL_NON_POOLING"] ??
+      process.env["DATABASE_URL"],
   },
 });

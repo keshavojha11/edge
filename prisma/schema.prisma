@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
 }
 
 model Market {
@@ -16,6 +16,7 @@ model Market {
   closeTime     DateTime?
   liquidity     Float?
   isPlayMoney   Boolean   @default(false)
+  runId         String?
   snapshotAt    DateTime  @default(now())
   url           String
   createdAt     DateTime  @default(now())
@@ -24,6 +25,7 @@ model Market {
   @@unique([venue, venueMarketId])
   @@index([venue])
   @@index([snapshotAt])
+  @@index([runId])
 }
 
 model MatchGroup {
@@ -32,8 +34,9 @@ model MatchGroup {
   marketIds        String
   matchConfidence  Float
   notedDifferences String
-  maxSpread        Float    // includes play-money venues
-  realMoneySpread  Float    @default(0) // real-money venues only (ranking key)
+  maxSpread        Float
+  realMoneySpread  Float    @default(0)
+  runId            String?
   updatedAt        DateTime @updatedAt
   createdAt        DateTime @default(now())
 
@@ -41,6 +44,7 @@ model MatchGroup {
 
   @@index([realMoneySpread])
   @@index([maxSpread])
+  @@index([runId])
 }
 
 model Watch {
@@ -66,4 +70,37 @@ model Event {
 
   @@index([type])
   @@index([createdAt])
+}
+
+// ─── Async live-ingest run tracking ─────────────────────────────────────────────
+
+model Run {
+  id        String      @id @default(cuid())
+  status    String      @default("running") // running | matching | completed | failed
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  jobs IngestJob[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model IngestJob {
+  id        String   @id @default(cuid())
+  runId     String
+  venue     String
+  kind      String   // selects the normalizer (see lib/targets.ts)
+  event     String   // logical event the job contributes to
+  label     String   // human label for progress UI
+  wireJobId String
+  status    String   @default("pending") // pending | completed | failed
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status])
 }

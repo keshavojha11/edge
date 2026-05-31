@@ -52,3 +52,4 @@ next-env.d.ts
 # Discovery output (may contain API responses — commit selectively)
 scripts/discovery-output/
 .gstack/
+.env*.local

@@ -89,6 +89,37 @@ export async function submitTask(
   return jobId;
 }
 
+export interface PollOnceResult {
+  state: "processing" | "completed" | "failed";
+  payload?: unknown;
+  error?: string;
+}
+
+// Single status check — no waiting. Used by the async /api/ingest/status worker
+// so a serverless function never blocks on a 2-min Wire job.
+export async function pollJobOnce(jobId: string): Promise<PollOnceResult> {
+  const res = await fetch(`${BASE}/v1/holocron/jobs/${jobId}`, { headers: headers() });
+  if (res.status === 429) {
+    throw new Error("RATE_LIMIT_EXCEEDED");
+  }
+  if (!res.ok) {
+    throw new Error(`Poll failed: ${res.status} ${await res.text()}`);
+  }
+  const data = (await res.json()) as {
+    status: string;
+    data?: unknown;
+    result?: unknown;
+  };
+  if (data.status === "completed" || data.status === "success") {
+    const payload = (data as Record<string, unknown>).data ?? data.result ?? data;
+    return { state: "completed", payload };
+  }
+  if (data.status === "failed" || data.status === "error") {
+    return { state: "failed", error: JSON.stringify(data).slice(0, 200) };
+  }
+  return { state: "processing" };
+}
+
 export async function pollJob(
   jobId: string,
   // Wire jobs observed to take ~2min; use 3min default
