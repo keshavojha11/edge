@@ -51,7 +51,9 @@ DISCOVER ──► INGEST ──► NORMALIZE ──► MATCH (LLM) ──► CO
 
 ---
 
-## Venues & Wire actions used
+## Wire catalogs & actions used
+
+**Prediction-market venues** (mispricings + trending):
 
 | Venue | Wire action IDs |
 |-------|----------------|
@@ -59,6 +61,17 @@ DISCOVER ──► INGEST ──► NORMALIZE ──► MATCH (LLM) ──► CO
 | Polymarket | `pm_get_markets`, `pm_get_market` |
 | Manifold | `mm_markets`, `mm_search_markets` |
 | Robinhood | `rh_get_markets`, `rh_get_event`, `rh_get_categories` |
+
+**Context catalogs** (macro ribbon + news, all cached in Postgres):
+
+| Catalog | Action | Panel |
+|---------|--------|-------|
+| `cboe` | `cboe_volatility_index` | VIX |
+| `fear_greed` | `fg_cnn_fear_greed` | CNN Fear & Greed |
+| `coingecko` | `cg_coin_markets` | BTC + ETH price |
+| `fred_stlouisfed` | `fr_series` | Fed funds + unemployment |
+| `cnbc` | `cn_top_stories` | Market Context news |
+| `google_news` | `gn_search` | Market Context news |
 
 Targeted events tracked by slug/ID:
 - `KXFED-26JUN` (Kalshi) — Fed June 2026 FOMC rate-level markets
