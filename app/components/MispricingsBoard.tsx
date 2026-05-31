@@ -146,6 +146,7 @@ export function MispricingsBoard() {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [isDemo, setIsDemo] = useState(false);
+  const [showLiveNote, setShowLiveNote] = useState(false);
 
   const toggle = (id: string) => {
     setExpanded((prev) => {
@@ -195,16 +196,25 @@ export function MispricingsBoard() {
     <div className="space-y-3">
       {/* DEMO_MODE label — P1 requirement: never misrepresent sample data as live */}
       {isDemo && (
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded border border-yellow-600/40 bg-yellow-600/10">
-          <span className="text-yellow-500 font-bold text-xs uppercase tracking-widest">Sample snapshot</span>
-          <span className="text-yellow-600/70 text-xs">— illustrative data, not live prices.</span>
-          <button
-            onClick={refresh}
-            disabled={refreshing}
-            className="ml-auto text-yellow-600 text-xs underline underline-offset-2 hover:text-yellow-400 disabled:opacity-40"
-          >
-            {refreshing ? "fetching live..." : "Run live refresh →"}
-          </button>
+        <div className="rounded border border-yellow-600/40 bg-yellow-600/10 px-3 py-1.5 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-yellow-500 font-bold text-xs uppercase tracking-widest">Sample snapshot</span>
+            <span className="text-yellow-600/70 text-xs">— illustrative data, not live prices.</span>
+            <button
+              onClick={() => setShowLiveNote((v) => !v)}
+              className="ml-auto text-yellow-600 text-xs underline underline-offset-2 hover:text-yellow-400"
+            >
+              How to run live →
+            </button>
+          </div>
+          {showLiveNote && (
+            <p className="text-[11px] text-yellow-600/60 leading-relaxed pt-1 border-t border-yellow-600/20">
+              Live mode pulls real odds via Anakin Wire, but each Wire job takes ~2&nbsp;min — longer than this
+              serverless function&apos;s limit. Run live locally: clone the repo, set <span className="font-mono">DEMO_MODE=false</span>,
+              then <span className="font-mono">npm run dev</span> and POST <span className="font-mono">/api/ingest?force=true</span>.
+              A verified live result (Polymarket 1.1% vs Robinhood 8.7% on &ge;4 Fed cuts in 2026, a 7.5pt spread) is in the README.
+            </p>
+          )}
         </div>
       )}
 
