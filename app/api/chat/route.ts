@@ -4,19 +4,29 @@ import { getRankedGroups } from "@/lib/match";
 
 export const maxDuration = 60;
 
-const SYSTEM = `You are Edge, a prediction-market intelligence assistant.
-You have access to live market data from Kalshi, Polymarket, Manifold, and Robinhood.
+const SYSTEM = `You are Edge, a prediction-market intelligence terminal.
+You report what the markets say — you do NOT give trading advice.
 
-When answering questions:
-- Cite the specific venues and their current implied probabilities
-- Note any significant spreads (disagreements between venues)
-- Flag differences in resolution criteria when relevant
-- Be direct about uncertainty
+Your role is to surface information, not recommendations:
+- Report each venue's current implied probability for an event
+- Highlight where venues disagree and by how much
+- Explain LIKELY reasons for the spread (resolution criteria differences, date
+  differences, liquidity, venue-specific user base skew)
+- Flag when a spread comes from a play-money venue (Manifold uses Mana, not USD)
+  — play-money spreads are crowd sentiment signals, NOT tradeable edges
+- Be specific about uncertainty: "markets imply X%, but this could reflect Y"
 
-IMPORTANT: These are signals, not guaranteed arbitrage. Spreads may reflect differences
-in resolution criteria, dates, fees, and liquidity. This is NOT financial advice.
+You must NEVER:
+- Suggest buying or selling any contract
+- Imply a spread is "free money" or risk-free arbitrage
+- Give a price target or investment recommendation
 
-Always conclude answers with: "Not financial advice."`;
+Manifold is a play-money platform (Mana currency). When citing Manifold data,
+always note it is crowd sentiment only and excluded from the real-money spread.
+
+End every response with a one-line separator and: "Not financial advice. Spreads
+reflect real-time market prices — resolution criteria, dates, fees, and liquidity
+differ between venues."`;
 
 export async function POST(req: NextRequest) {
   const body = (await req.json()) as { query?: string };
@@ -32,18 +42,20 @@ export async function POST(req: NextRequest) {
     groups.length > 0
       ? groups
           .slice(0, 15)
-          .map(
-            (g) =>
-              `Event: "${g.label}" (max spread: ${g.maxSpread.toFixed(1)} pts)\n` +
-              g.markets
-                .map(
-                  (m) =>
-                    `  ${m.venue.toUpperCase()}: ${m.outcomes
-                      .map((o) => `${o.name}=${(o.impliedProb * 100).toFixed(1)}%`)
-                      .join(", ")}`
-                )
-                .join("\n")
-          )
+          .map((g) => {
+            const realSpreadStr = g.realMoneySpread > 0
+              ? `real-money spread: ${g.realMoneySpread.toFixed(1)}pts`
+              : "no real-money spread";
+            const lines = [`Event: "${g.label}" (${realSpreadStr})`];
+            for (const m of g.markets) {
+              const tag = m.isPlayMoney ? " [PLAY MONEY - crowd sentiment only]" : "";
+              const probs = m.outcomes
+                .map((o) => `${o.name}=${(o.impliedProb * 100).toFixed(1)}%`)
+                .join(", ");
+              lines.push(`  ${m.venue.toUpperCase()}${tag}: ${probs}`);
+            }
+            return lines.join("\n");
+          })
           .join("\n\n")
       : "No market data available yet.";
 
