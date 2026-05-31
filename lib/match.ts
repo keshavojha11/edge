@@ -56,14 +56,43 @@ Only include groups with 2+ markets from different venues. Skip singletons.`;
 
 export async function matchMarkets(
   markets: NormalizedMarket[],
-  opts: { batchSize?: number } = {}
+  opts: { batchSize?: number; perVenueCap?: number } = {}
 ): Promise<MatchedGroup[]> {
   if (markets.length === 0) return [];
 
-  const batchSize = opts.batchSize ?? 80;
-  const batches = chunkMarkets(markets, batchSize);
-  const allGroups: MatchedGroup[] = [];
+  const batchSize = opts.batchSize ?? 60;
+  const perVenueCap = opts.perVenueCap ?? 60;
 
+  // Each batch must contain markets from multiple venues.
+  // Strategy: cap per-venue (by liquidity desc), then interleave so
+  // every batch has all venues represented.
+  const byVenue: Record<string, NormalizedMarket[]> = {};
+  for (const m of markets) {
+    if (!byVenue[m.venue]) byVenue[m.venue] = [];
+    byVenue[m.venue].push(m);
+  }
+
+  // Sort each venue's markets by liquidity desc, cap
+  const capped: NormalizedMarket[][] = Object.values(byVenue).map((ms) =>
+    ms
+      .sort((a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0))
+      .slice(0, perVenueCap)
+  );
+
+  // Interleave: take one from each venue in round-robin
+  const interleaved: NormalizedMarket[] = [];
+  const maxLen = Math.max(...capped.map((c) => c.length));
+  for (let i = 0; i < maxLen; i++) {
+    for (const venueMarkets of capped) {
+      if (venueMarkets[i]) interleaved.push(venueMarkets[i]);
+    }
+  }
+
+  // Chunk into batches — each chunk will have all venues mixed in
+  const batches = chunkMarkets(interleaved, batchSize);
+  console.log(`[match] ${interleaved.length} markets across ${capped.length} venues → ${batches.length} batch(es)`);
+
+  const allGroups: MatchedGroup[] = [];
   for (const batch of batches) {
     const groups = await matchBatch(batch);
     allGroups.push(...groups);

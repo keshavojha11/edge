@@ -12,14 +12,14 @@ interface PolymarketMarket {
   closed: boolean;
 }
 
+// Wire envelope already unwrapped by ingest.ts — raw is { count, markets, ... }
 interface PolymarketPayload {
-  data: {
-    markets: PolymarketMarket[];
-  };
+  markets?: PolymarketMarket[];
+  [k: string]: unknown;
 }
 
 export function normalizePolymarket(raw: PolymarketPayload): NormalizedMarket[] {
-  const markets = raw?.data?.markets ?? [];
+  const markets = raw?.markets ?? [];
   const out: NormalizedMarket[] = [];
 
   for (const m of markets) {

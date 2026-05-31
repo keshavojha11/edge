@@ -12,14 +12,14 @@ interface ManifoldMarket {
   isResolved: boolean;
 }
 
+// Wire envelope already unwrapped by ingest.ts — raw is { count, markets, ... }
 interface ManifoldPayload {
-  data: {
-    markets: ManifoldMarket[];
-  };
+  markets?: ManifoldMarket[];
+  [k: string]: unknown;
 }
 
 export function normalizeManifold(raw: ManifoldPayload): NormalizedMarket[] {
-  const markets = raw?.data?.markets ?? [];
+  const markets = raw?.markets ?? [];
   const out: NormalizedMarket[] = [];
 
   for (const m of markets) {

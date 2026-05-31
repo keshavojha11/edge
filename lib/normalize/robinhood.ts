@@ -20,14 +20,14 @@ interface RobinhoodEvent {
   total_open_interest: string;
 }
 
+// Wire envelope already unwrapped by ingest.ts — raw is { count, events, ... }
 interface RobinhoodPayload {
-  data: {
-    events: RobinhoodEvent[];
-  };
+  events?: RobinhoodEvent[];
+  [k: string]: unknown;
 }
 
 export function normalizeRobinhood(raw: RobinhoodPayload): NormalizedMarket[] {
-  const events = raw?.data?.events ?? [];
+  const events = raw?.events ?? [];
   const out: NormalizedMarket[] = [];
 
   for (const event of events) {
@@ -43,9 +43,10 @@ export function normalizeRobinhood(raw: RobinhoodPayload): NormalizedMarket[] {
       impliedProb: (c.yes_bid + c.yes_ask) / 2,
     }));
 
-    // Sanity: probs should roughly sum to 1 (within 15% for multi-outcome)
+    // For winner-takes-all multi-outcome markets probs sum to ~1.
+    // For independent player/prop markets they may not — skip those.
     const totalProb = outcomes.reduce((s, o) => s + o.impliedProb, 0);
-    if (totalProb < 0.7 || totalProb > 1.3) continue;
+    if (totalProb < 0.5 || totalProb > 2.0) continue;
 
     const firstContract = tradable[0];
     const openInterest = parseInt(event.total_open_interest ?? "0") / 100;

@@ -20,14 +20,14 @@ interface KalshiEvent {
   markets: KalshiMarket[];
 }
 
+// Wire envelope already unwrapped by ingest.ts — raw is { count, events, ... }
 interface KalshiEventsPayload {
-  data: {
-    events: KalshiEvent[];
-  };
+  events?: KalshiEvent[];
+  [k: string]: unknown;
 }
 
 export function normalizeKalshi(raw: KalshiEventsPayload): NormalizedMarket[] {
-  const events = raw?.data?.events ?? [];
+  const events = raw?.events ?? [];
   const out: NormalizedMarket[] = [];
 
   for (const event of events) {
