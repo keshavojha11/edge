@@ -360,13 +360,11 @@ export async function clearDemoGroups(): Promise<number> {
 export async function getRankedGroups(): Promise<RankedGroup[]> {
   const { prisma } = await import("./db");
 
-  // If live groups exist, exclude demo groups entirely — never mix seed with live
-  const liveCount = await prisma.matchGroup.count({
-    where: { id: { not: { startsWith: "demo-" } } },
-  });
-  const whereClause = liveCount > 0
-    ? { id: { not: { startsWith: "demo-" } } }
-    : {}; // DEMO_MODE: show seed only
+  // Strict source separation: DEMO_MODE → seed only; live → live only. Never mix.
+  const demoMode = process.env.DEMO_MODE === "true";
+  const whereClause = demoMode
+    ? { id: { startsWith: "demo-" } }
+    : { id: { not: { startsWith: "demo-" } } };
 
   const groups = await prisma.matchGroup.findMany({
     where: whereClause,

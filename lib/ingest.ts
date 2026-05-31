@@ -79,28 +79,50 @@ async function upsertMarkets(markets: NormalizedMarket[]): Promise<void> {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function rowToMarket(m: any): NormalizedMarket {
+  return {
+    venue: m.venue as NormalizedMarket["venue"],
+    venueMarketId: m.venueMarketId,
+    title: m.title,
+    outcomes: JSON.parse(m.outcomesJson),
+    closeTime: m.closeTime,
+    liquidity: m.liquidity,
+    isPlayMoney: m.isPlayMoney ?? false,
+    url: m.url,
+  };
+}
+
 export async function getCachedMarkets(): Promise<NormalizedMarket[] | null> {
   try {
     const { prisma } = await import("./db");
     const cutoff = new Date(Date.now() - CACHE_TTL_MS);
+    // Live markets only (no demo- prefix)
     const markets = await prisma.market.findMany({
-      where: { snapshotAt: { gte: cutoff } },
+      where: {
+        snapshotAt: { gte: cutoff },
+        venueMarketId: { not: { startsWith: "demo-" } },
+      },
       orderBy: { snapshotAt: "desc" },
     });
     if (markets.length === 0) return null;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return markets.map((m: any) => ({
-      venue: m.venue as NormalizedMarket["venue"],
-      venueMarketId: m.venueMarketId,
-      title: m.title,
-      outcomes: JSON.parse(m.outcomesJson),
-      closeTime: m.closeTime,
-      liquidity: m.liquidity,
-      isPlayMoney: m.isPlayMoney ?? false,
-      url: m.url,
-    }));
+    return markets.map(rowToMarket);
   } catch {
     return null;
+  }
+}
+
+async function getStaleFallbackMarkets(): Promise<NormalizedMarket[]> {
+  try {
+    const { prisma } = await import("./db");
+    // Return any live markets regardless of age — better stale than empty
+    const markets = await prisma.market.findMany({
+      where: { venueMarketId: { not: { startsWith: "demo-" } } },
+      orderBy: { snapshotAt: "desc" },
+    });
+    return markets.map(rowToMarket);
+  } catch {
+    return [];
   }
 }
 
@@ -116,10 +138,6 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
       return { markets: cached, creditsUsed: 0, errors: [] };
     }
   }
-
-  // Clear seed match groups before live data arrives so the two never mix
-  const { clearDemoGroups } = await import("./match");
-  await clearDemoGroups();
 
   // Submit all 4 jobs in parallel (staggered by 500ms to avoid rate limits)
   console.log("[ingest] submitting Wire jobs...");
@@ -140,10 +158,11 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
     }
   }
 
-  // Poll all jobs (they run concurrently on Wire's side)
+  // Poll all jobs concurrently — partial failures are OK (other venues still succeed)
   console.log("[ingest] polling jobs...");
   const allMarkets: NormalizedMarket[] = [];
   const pollErrors: string[] = [];
+  const succeededVenues: string[] = [];
 
   await Promise.all(
     jobMap.map(async ({ venue, jobId }) => {
@@ -155,6 +174,7 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
         const markets = normalize(payload);
         console.log(`[ingest] ${venue}: ${markets.length} markets`);
         allMarkets.push(...markets);
+        succeededVenues.push(venue);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[ingest] ${venue} poll failed: ${msg}`);
@@ -163,18 +183,27 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
     })
   );
 
-  // Persist to DB
+  const creditsUsed = getCreditsSpent();
+  const errors = [...submitErrors, ...pollErrors];
+
+  // Persist whatever we got (partial success is fine — one venue down ≠ blank board)
   if (allMarkets.length > 0) {
     await upsertMarkets(allMarkets);
-    console.log(`[ingest] saved ${allMarkets.length} markets to DB`);
+    console.log(`[ingest] saved ${allMarkets.length} markets from ${succeededVenues.join(", ")}`);
+    return { markets: allMarkets, creditsUsed, errors };
   }
 
-  const creditsUsed = getCreditsSpent();
-  return {
-    markets: allMarkets,
-    creditsUsed,
-    errors: [...submitErrors, ...pollErrors],
-  };
+  // All venues failed — serve stale DB data rather than returning empty
+  if (errors.length > 0) {
+    console.warn("[ingest] all venues failed — serving stale cache");
+    const stale = await getStaleFallbackMarkets();
+    if (stale.length > 0) {
+      console.log(`[ingest] stale fallback: ${stale.length} markets`);
+      return { markets: stale, creditsUsed, errors };
+    }
+  }
+
+  return { markets: allMarkets, creditsUsed, errors };
 }
 
 function sleep(ms: number) {
