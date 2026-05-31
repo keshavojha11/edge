@@ -29,7 +29,7 @@ export const DEMO_GROUPS: RankedGroup[] = [
       {
         venue: "polymarket",
         title: "US recession in 2026?",
-        url: "https://polymarket.com/event/us-recession-in-2026",
+        url: "https://polymarket.com/markets?_q=US%20recession%202026",
         outcomes: [
           { name: "Yes", impliedProb: 0.24 },
           { name: "No", impliedProb: 0.76 },
@@ -109,7 +109,7 @@ export const DEMO_GROUPS: RankedGroup[] = [
       {
         venue: "polymarket",
         title: "Will BTC reach $150,000 before Jan 1, 2027?",
-        url: "https://polymarket.com/event/will-btc-reach-150k-before-jan-1-2027",
+        url: "https://polymarket.com/markets?_q=Bitcoin%20150k%202026",
         outcomes: [
           { name: "Yes", impliedProb: 0.41 },
           { name: "No", impliedProb: 0.59 },

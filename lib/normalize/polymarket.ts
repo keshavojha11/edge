@@ -42,7 +42,9 @@ export function normalizePolymarket(raw: PolymarketPayload): NormalizedMarket[] 
       closeTime: m.end_date ? new Date(m.end_date) : null,
       liquidity: m.liquidity ?? null,
       isPlayMoney: false,
-      url: `https://polymarket.com/event/${m.slug}`,
+      // A market slug is NOT a valid /event/ slug for grouped markets (404).
+      // Link to a search that always resolves to a real Polymarket page.
+      url: `https://polymarket.com/markets?_q=${encodeURIComponent(m.question)}`,
     });
   }
 

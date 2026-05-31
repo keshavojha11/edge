@@ -140,7 +140,7 @@ export function normalizeByKind(kind: string, payload: unknown): NormalizedMarke
         closeTime: m.end_date ? new Date(m.end_date) : null,
         liquidity: m.liquidity ?? null,
         isPlayMoney: false,
-        url: `https://polymarket.com/event/${m.slug}`,
+        url: `https://polymarket.com/markets?_q=${encodeURIComponent(m.question)}`,
       }];
     }
 
