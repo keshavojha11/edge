@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       : "No market data available yet.";
 
   try {
-    const answer = await chat(
+    let answer = await chat(
       [
         { role: "system", content: SYSTEM },
         {
@@ -68,8 +68,16 @@ export async function POST(req: NextRequest) {
           content: `Current market data:\n\n${marketContext}\n\n---\n\nQuestion: ${query}`,
         },
       ],
-      { temperature: 0.3, maxTokens: 800 }
+      { temperature: 0.3, maxTokens: 1200 }
     );
+
+    // Guarantee the not-financial-advice disclaimer is always present, even if
+    // the model omitted it or the response was truncated. Integrity requirement.
+    if (!answer.toLowerCase().includes("not financial advice")) {
+      answer =
+        answer.trimEnd() +
+        "\n\n---\n*Not financial advice. Spreads reflect real-time market prices — resolution criteria, dates, fees, and liquidity differ between venues.*";
+    }
 
     // Identify which groups were cited
     const cited = groups
