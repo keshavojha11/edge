@@ -96,6 +96,7 @@ export async function getCachedMarkets(): Promise<NormalizedMarket[] | null> {
       outcomes: JSON.parse(m.outcomesJson),
       closeTime: m.closeTime,
       liquidity: m.liquidity,
+      isPlayMoney: m.isPlayMoney ?? false,
       url: m.url,
     }));
   } catch {
@@ -115,6 +116,10 @@ export async function ingestAll(opts: { force?: boolean } = {}): Promise<{
       return { markets: cached, creditsUsed: 0, errors: [] };
     }
   }
+
+  // Clear seed match groups before live data arrives so the two never mix
+  const { clearDemoGroups } = await import("./match");
+  await clearDemoGroups();
 
   // Submit all 4 jobs in parallel (staggered by 500ms to avoid rate limits)
   console.log("[ingest] submitting Wire jobs...");

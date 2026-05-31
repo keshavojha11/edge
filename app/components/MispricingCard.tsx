@@ -23,21 +23,21 @@ interface Props {
 }
 
 export function MispricingCard({ group, isHero }: Props) {
-  // Real-money spread for headline; top real-money pair for callout
+  const realMarkets = group.markets.filter((m) => !m.isPlayMoney);
+  const playMarkets = group.markets.filter((m) => m.isPlayMoney);
+  const hasRealMoneySpread = group.realMoneySpread > 0;
+
+  // Top spread pair from real-money venues only
   const realMoneyDetails = group.spreadDetails.filter(
     (s) => !group.markets.find((m) => m.venue === s.venueA)?.isPlayMoney &&
             !group.markets.find((m) => m.venue === s.venueB)?.isPlayMoney
   );
-  const topRealSpread = realMoneyDetails[0] ?? group.spreadDetails[0];
-  const headlineSpread = group.realMoneySpread > 0 ? group.realMoneySpread : group.maxSpread;
-
-  const realMarkets = group.markets.filter((m) => !m.isPlayMoney);
-  const playMarkets = group.markets.filter((m) => m.isPlayMoney);
+  const topRealSpread = realMoneyDetails[0] ?? null;
 
   return (
     <div
       className={`rounded-lg border p-4 space-y-3 ${
-        isHero
+        isHero && hasRealMoneySpread
           ? "border-amber-400/60 bg-amber-400/5"
           : "border-zinc-800 bg-zinc-900/50"
       }`}
@@ -59,7 +59,7 @@ export function MispricingCard({ group, isHero }: Props) {
             {" · "}{(group.matchConfidence * 100).toFixed(0)}% match confidence
           </p>
         </div>
-        <SpreadBadge pts={headlineSpread} />
+        <SpreadBadge pts={group.realMoneySpread} isRealMoney={hasRealMoneySpread} />
       </div>
 
       {/* Real-money venues */}

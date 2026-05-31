@@ -35,11 +35,15 @@ const MATCH_SYSTEM = `You are a prediction-market analyst. Given a list of marke
 identify groups of markets that are asking about the SAME real-world event with SIMILAR resolution criteria.
 
 Rules:
-- Only group markets that are genuinely asking the same question
-- Note differences in resolution criteria, dates, and scope
-- Binary (Yes/No) markets may match multi-outcome markets if one outcome is equivalent
-- Confidence: 0.9+ = nearly identical, 0.7-0.9 = same event different wording, below 0.7 = uncertain
-- Do NOT group markets about different dates even if same topic
+- Only group markets that are genuinely asking the same question about the SAME outcome scope
+- SCOPE must match exactly: a series-winner market and a single-game winner market are DIFFERENT bets even for the same teams — do NOT group them
+- Do NOT group per-game markets with series-outcome markets
+- Do NOT group markets that resolve on different events (e.g. Game 1 vs Game 7 vs who wins the series)
+- RESOLUTION must be compatible: close dates within ~30 days AND similar criteria
+- A binary Yes/No market may match a single outcome of a multi-outcome market only if semantically equivalent
+- Confidence: 0.9+ = nearly identical criteria and dates, 0.7-0.9 = same event minor wording difference, below 0.75 = do not output
+- Only output groups with confidence >= 0.75
+- When unsure whether two markets resolve on the same real-world outcome, omit the group
 
 Return ONLY valid JSON, no markdown:
 {
@@ -53,7 +57,7 @@ Return ONLY valid JSON, no markdown:
   ]
 }
 
-Only include groups with 2+ markets from different venues. Skip singletons.`;
+Only include groups with 2+ markets from DIFFERENT venues. Skip singletons. When uncertain, omit.`;
 
 export async function matchMarkets(
   markets: NormalizedMarket[],
@@ -136,19 +140,40 @@ async function matchBatch(markets: NormalizedMarket[]): Promise<MatchedGroup[]> 
       .filter((i) => i >= 0 && i < markets.length)
       .map((i) => markets[i]);
 
-    // Require at least 2 markets from distinct venues
+    // Hard guard 1: require 2+ markets from DISTINCT venues
     const venues = new Set(groupMarkets.map((m) => m.venue));
     if (venues.size < 2) continue;
 
+    // Hard guard 2: require 2+ distinct real-money venues
+    // (groups with only play-money cross-venue matches have no edge)
+    const realMoneyVenues = new Set(
+      groupMarkets.filter((m) => !m.isPlayMoney).map((m) => m.venue)
+    );
+    if (realMoneyVenues.size < 1) continue; // must have at least 1 real-money venue
+
+    // Hard guard 3: reject if LLM confidence is below threshold
+    const confidence = g.confidence ?? 0.8;
+    if (confidence < 0.75) continue;
+
+    // Hard guard 4: close-date spread check — if markets close > 90 days apart,
+    // require very high confidence (0.9+) to avoid cross-season false matches
+    const closeDates = groupMarkets
+      .map((m) => m.closeTime?.getTime())
+      .filter((t): t is number => t != null);
+    if (closeDates.length >= 2) {
+      const dateRangeMs = Math.max(...closeDates) - Math.min(...closeDates);
+      const dateRangeDays = dateRangeMs / (1000 * 60 * 60 * 24);
+      if (dateRangeDays > 90 && confidence < 0.9) continue;
+    }
+
     const spreadDetails = computeSpreads(groupMarkets);
     const maxSpread = spreadDetails.reduce((max, s) => Math.max(max, s.spreadPts), 0);
-    // Headline spread: real-money venues only
     const realMoneySpread = computeRealMoneySpread(groupMarkets);
 
     groups.push({
       label: g.label,
       markets: groupMarkets,
-      matchConfidence: g.confidence ?? 0.8,
+      matchConfidence: confidence,
       notedDifferences: g.notedDifferences ?? [],
       maxSpread,
       realMoneySpread,
@@ -175,6 +200,9 @@ export function computeSpreads(markets: NormalizedMarket[]): SpreadDetail[] {
     for (let j = i + 1; j < markets.length; j++) {
       const a = markets[i];
       const b = markets[j];
+
+      // Never compare markets from the same venue — that's not a cross-venue spread
+      if (a.venue === b.venue) continue;
 
       // Find the "primary" outcome for each (first outcome — usually YES)
       const outcomeA = a.outcomes[0];
@@ -268,11 +296,80 @@ export interface RankedGroup {
   notedDifferences: string[];
 }
 
+// Remove groups whose constituent markets no longer exist, or that have
+// fewer than 2 distinct real-money venues after recomputing.
+export async function pruneStaleGroups(): Promise<number> {
+  const { prisma } = await import("./db");
+  const groups = await prisma.matchGroup.findMany();
+  let pruned = 0;
+
+  for (const g of groups) {
+    const marketIds: string[] = JSON.parse(g.marketIds as string);
+    const existing = await prisma.market.findMany({
+      where: { id: { in: marketIds } },
+    });
+
+    // Prune if too few markets remain
+    if (existing.length < 2) {
+      await prisma.matchGroup.delete({ where: { id: g.id } });
+      pruned++;
+      continue;
+    }
+
+    // Prune if stored ID count > existing count: some markets were deleted.
+    // These are stale groups that reference no-longer-existent markets.
+    if (marketIds.length > existing.length) {
+      await prisma.matchGroup.delete({ where: { id: g.id } });
+      pruned++;
+      continue;
+    }
+
+    // Prune if only one distinct venue remains
+    const distinctVenues = new Set(existing.map((m: { venue: string }) => m.venue));
+    if (distinctVenues.size < 2) {
+      await prisma.matchGroup.delete({ where: { id: g.id } });
+      pruned++;
+      continue;
+    }
+
+    // Prune if confidence is below threshold
+    if (g.matchConfidence < 0.75) {
+      await prisma.matchGroup.delete({ where: { id: g.id } });
+      pruned++;
+      continue;
+    }
+  }
+
+  if (pruned > 0) console.log(`[match] pruned ${pruned} stale/invalid groups`);
+  return pruned;
+}
+
+export async function clearDemoGroups(): Promise<number> {
+  const { prisma } = await import("./db");
+  const demoGroups = await prisma.matchGroup.findMany({
+    where: { id: { startsWith: "demo-" } },
+  });
+  if (demoGroups.length === 0) return 0;
+  await prisma.matchGroup.deleteMany({ where: { id: { startsWith: "demo-" } } });
+  // Delete seed markets that only exist for demo (venueMarketId starts with "demo-")
+  await prisma.market.deleteMany({ where: { venueMarketId: { startsWith: "demo-" } } });
+  console.log(`[match] cleared ${demoGroups.length} demo match groups`);
+  return demoGroups.length;
+}
+
 export async function getRankedGroups(): Promise<RankedGroup[]> {
   const { prisma } = await import("./db");
 
-  // Sort by realMoneySpread so play-money-inflated spreads don't dominate
+  // If live groups exist, exclude demo groups entirely — never mix seed with live
+  const liveCount = await prisma.matchGroup.count({
+    where: { id: { not: { startsWith: "demo-" } } },
+  });
+  const whereClause = liveCount > 0
+    ? { id: { not: { startsWith: "demo-" } } }
+    : {}; // DEMO_MODE: show seed only
+
   const groups = await prisma.matchGroup.findMany({
+    where: whereClause,
     orderBy: { realMoneySpread: "desc" },
     take: 50,
   });
@@ -300,6 +397,19 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
       url: m.url,
     }));
 
+    // Always recompute realMoneySpread from live isPlayMoney flags —
+    // stored value may be stale (created before backfill or schema change)
+    const liveRealMoneySpread = computeRealMoneySpread(normalized);
+
+    // Bug 2 guard: update stored value if it differs significantly
+    const stored = (g as Record<string, unknown>).realMoneySpread as number ?? 0;
+    if (Math.abs(stored - liveRealMoneySpread) > 0.5) {
+      await prisma.matchGroup.update({
+        where: { id: g.id },
+        data: { realMoneySpread: liveRealMoneySpread },
+      }).catch(() => null);
+    }
+
     result.push({
       id: g.id,
       label: g.label,
@@ -312,7 +422,7 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
         isPlayMoney: m.isPlayMoney,
       })),
       maxSpread: g.maxSpread,
-      realMoneySpread: (g as any).realMoneySpread ?? 0,
+      realMoneySpread: liveRealMoneySpread,
       spreadDetails: computeSpreads(normalized),
       matchConfidence: g.matchConfidence,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -320,6 +430,8 @@ export async function getRankedGroups(): Promise<RankedGroup[]> {
     });
   }
 
+  // Sort by live realMoneySpread (recomputed above, not stale stored value)
+  result.sort((a, b) => b.realMoneySpread - a.realMoneySpread);
   return result;
 }
 

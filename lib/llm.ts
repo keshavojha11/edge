@@ -46,7 +46,24 @@ export async function jsonChat<T>(
   opts: { temperature?: number; maxTokens?: number } = {}
 ): Promise<T> {
   const raw = await chat(messages, { ...opts, temperature: opts.temperature ?? 0 });
-  // Strip markdown code fences if present
-  const cleaned = raw.replace(/^```(?:json)?\s*/m, "").replace(/\s*```\s*$/m, "").trim();
-  return JSON.parse(cleaned) as T;
+
+  // 1. Try stripping markdown fences
+  const fenceStripped = raw
+    .replace(/^```(?:json)?\s*/m, "")
+    .replace(/\s*```\s*$/m, "")
+    .trim();
+
+  // 2. If that's valid JSON, use it
+  try {
+    return JSON.parse(fenceStripped) as T;
+  } catch {
+    // 3. Extract the first {...} or [...] block from anywhere in the response
+    const objMatch = raw.match(/\{[\s\S]*\}/);
+    const arrMatch = raw.match(/\[[\s\S]*\]/);
+    const candidate = objMatch?.[0] ?? arrMatch?.[0];
+    if (candidate) {
+      return JSON.parse(candidate) as T;
+    }
+    throw new Error(`jsonChat: no JSON found in response: ${raw.slice(0, 200)}`);
+  }
 }
