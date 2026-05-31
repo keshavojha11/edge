@@ -85,17 +85,18 @@ Targeted events tracked by slug/ID:
 
 Real-money cross-venue overlap is genuinely sparse and concentrated in large macro events — Fed decisions, elections, major crypto price levels. Exotic or short-term markets don't trade on multiple regulated venues simultaneously.
 
-When `DEMO_MODE=true` (default on the deployed URL), the board shows a curated illustrative snapshot labeled **"SAMPLE SNAPSHOT — not live"**:
-- **8.0pt AMBER** US Recession 2026 — Kalshi 32% vs Polymarket 24%
-- **6.0pt AMBER** Fed Rate Cut June 2026 — Kalshi 62% vs Robinhood 56%
-- **2.0pt GREY** BTC $150k by end 2026 — Polymarket 41% vs Kalshi 39%
-
-A "Run live refresh" button triggers a real Wire ingest (~6 credits, ~2 minutes).
-
-When `DEMO_MODE=false`, the board shows only live Wire data. At submission time, the live board shows:
+**The deployed app does a genuine end-to-end live Wire ingest.** Click **▶ Run live** and the board pulls real odds via Anakin Wire in ~2-3 min, then shows a green **● LIVE** banner with the run timestamp. A verified live result:
 - **7.5pt AMBER** "At least 4 Fed rate cuts in 2026": Polymarket 1.1% vs Robinhood-derived 8.7%
 
-Manifold markets appear as "crowd sentiment" (grey, smaller, de-emphasized) and never drive the amber badge.
+### How live runs beat the serverless timeout
+
+Wire jobs take ~2 min each, but no serverless function may run that long. Edge embraces Wire's async pattern, split across two short calls:
+- **`POST /api/ingest/start`** — submits all Wire tasks (just the POSTs), stores the returned `job_id`s in Postgres with `status=pending`, returns a `runId` immediately (<60s). Dedupes any in-flight run.
+- **`GET /api/ingest/status?run=ID`** — the frontend polls this every 3s. Each call does a *single* status check per pending job (no blocking), normalizes + upserts any that completed, and when all jobs are in, runs LLM matching once and stores the groups. Returns per-venue progress + groups-so-far. Handles 429 with soft backoff and partial success.
+
+The board defaults to the **most recent completed live run** from Postgres ("● LIVE · last updated {time}"). The labeled **SAMPLE SNAPSHOT** appears only as a fallback when no completed run exists yet. Credits are spent only on an explicit button click, never on page load.
+
+Manifold markets appear as "crowd sentiment" (grey, de-emphasized) and never drive the amber real-money badge.
 
 ---
 
@@ -106,17 +107,18 @@ git clone https://github.com/keshavojha/edge
 cd edge
 npm install
 cp .env.example .env
-# Fill ANAKIN_API_KEY and OPENROUTER_API_KEY in .env
+# Fill ANAKIN_API_KEY, OPENROUTER_API_KEY, and DATABASE_URL (Postgres) in .env
 npx prisma migrate dev
-npm run db:seed   # populate DEMO_MODE data
 npm run dev       # http://localhost:3000
 ```
 
-Live mode (uses Wire credits, ~2 min):
+Edge uses **Postgres** (Neon/Supabase/Vercel Postgres via `DATABASE_URL`) so the
+async run state persists on serverless. Then in the app click **▶ Run live**, or
+drive the API directly:
 ```bash
-# Set DEMO_MODE=false in .env
-curl -X POST http://localhost:3000/api/ingest?force=true
-curl -X POST http://localhost:3000/api/match
+RUN=$(curl -s -X POST localhost:3000/api/ingest/start | jq -r .runId)
+# poll every ~3s until done
+curl -s "localhost:3000/api/ingest/status?run=$RUN" | jq '{status, jobs, groups: (.groups|length)}'
 ```
 
 ---
@@ -132,11 +134,15 @@ Environment variables (Vercel dashboard):
 ANAKIN_API_KEY=...
 OPENROUTER_API_KEY=...
 OPENROUTER_MODEL=anthropic/claude-sonnet-4.6
-DATABASE_URL=postgres://...    # Vercel Postgres or Neon
-DEMO_MODE=true                 # false for fully live board
+DATABASE_URL=postgres://...    # Neon (via Vercel marketplace), Supabase, etc.
+DEMO_MODE=false                # false = live runs default, demo is fallback
 DISCORD_WEBHOOK_URL=...        # optional: spread alerts
 CRON_SECRET=...                # optional: secure the cron endpoint
 ```
+
+The deployed instance uses Neon Postgres provisioned through the Vercel
+marketplace integration (`vercel integration add neon`), which auto-sets
+`DATABASE_URL` across environments.
 
 ---
 
